@@ -15,7 +15,7 @@ from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import (__version__, asr, cloud, components, config, diarize, hf, media, pipeline, report, store,
+from . import (__version__, asr, cloud, components, config, diarize, hf, isolated, media, pipeline, report, store,
                summarize, transcript_parser, updater)
 
 STATIC = Path(__file__).parent / "static"
@@ -361,6 +361,12 @@ def enhance(call_id: str):
 
     threading.Thread(target=run, daemon=True).start()
     return {"state": "running"}
+
+
+@app.post("/api/calls/{call_id}/skip_speakers")
+def skip_speakers(call_id: str):
+    _meta_or_404(call_id)
+    return {"stopped": isolated.cancel(call_id)}
 
 
 @app.post("/api/calls/{call_id}/speakers")

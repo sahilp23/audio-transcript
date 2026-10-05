@@ -123,7 +123,12 @@ def _read_wav(path: str):
     return {"waveform": torch.from_numpy(audio).unsqueeze(0), "sample_rate": rate}
 
 
-def diarize(wav_path: str, gentle: bool = False) -> list[dict]:
+# Rough share of the work per pyannote step, for a progress bar.
+_STEPS = {"segmentation": (0.0, 0.25), "speaker_counting": (0.25, 0.27), "embeddings": (0.27, 0.95),
+          "discrete_diarization": (0.95, 1.0)}
+
+
+def diarize(wav_path: str, gentle: bool = False, progress=None) -> list[dict]:
     """Returns [{"s": start, "e": end, "spk": "SPEAKER_00"}, ...] sorted by start.
 
     gentle: CPU only with a few threads, so the Mac stays usable."""
@@ -132,7 +137,22 @@ def diarize(wav_path: str, gentle: bool = False) -> list[dict]:
 
         torch.set_num_threads(4)
     pipeline = load_pipeline("cpu" if gentle else None)
-    output = pipeline(_read_wav(wav_path))
+    # Batch the work (the library default is one window at a time, which is slow).
+    for attr in ("embedding_batch_size", "segmentation_batch_size"):
+        if hasattr(pipeline, attr):
+            try:
+                setattr(pipeline, attr, 32)
+            except Exception:
+                pass
+
+    def hook(step, artefact=None, file=None, total=None, completed=None):
+        if progress is None or step not in _STEPS:
+            return
+        lo, hi = _STEPS[step]
+        frac = (completed / total) if total and completed is not None else 1.0
+        progress(lo + (hi - lo) * max(0.0, min(1.0, frac)))
+
+    output = pipeline(_read_wav(wav_path), hook=hook)
     annotation = getattr(output, "speaker_diarization", output)  # 4.x wraps the result
     segs = [
         {"s": round(turn.start, 3), "e": round(turn.end, 3), "spk": str(label)}

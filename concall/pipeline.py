@@ -124,16 +124,26 @@ def process(call_id: str) -> None:
         if not official and not diar_path.exists():
             reason = diarize.available()
             if reason is None:
-                store.update_meta(call_id, stage="Separating speakers", progress=0.82)
+                # The transcript is usable already: show it while speakers are worked out.
+                build_doc(call_id)
+                store.update_meta(call_id, stage="Separating speakers", progress=0.82, speakers_pending=True)
                 try:
                     components.ensure_speakers_ready(lambda msg, p: store.update_meta(call_id, stage=msg))
                     gentle = config.gentle_mode()
-                    store.update_meta(call_id, progress=0.82, stage=(
-                        "Separating speakers (gentle mode, keeps the Mac usable)" if gentle else "Separating speakers"))
-                    store.write_json(diar_path, isolated.run("diarize", str(wav), {}, gentle))
+                    label = "Separating speakers" + (" (gentle mode)" if gentle else "")
+                    store.update_meta(call_id, stage=label, progress=0.82)
+
+                    def on_diar(p: float) -> None:
+                        store.update_meta(call_id, progress=round(0.82 + 0.14 * p, 3), stage=f"{label}: {round(p * 100)}%")
+
+                    store.write_json(diar_path, isolated.run("diarize", str(wav), {}, gentle, on_diar, tag=call_id))
+                except isolated.Cancelled:
+                    warnings.append("Speaker separation skipped. You can run it later: Speakers tab → Detect speakers.")
                 except Exception as exc:
                     traceback.print_exc()
                     warnings.append(f"Speaker separation failed: {exc}")
+                finally:
+                    store.update_meta(call_id, speakers_pending=False)
             else:
                 warnings.append(f"Speaker separation skipped: {reason}.")
     finally:

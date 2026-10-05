@@ -519,3 +519,61 @@ def test_cloud_requests_send_a_user_agent_and_explain_errors(monkeypatch):
 
     monkeypatch.setattr(cloud.urllib.request, "urlopen", fake_401)
     assert "Invalid API Key" in cloud.check_key("gsk_abc")["error"]
+
+
+def test_isolated_job_can_be_cancelled():
+    import threading
+
+    from concall import isolated
+
+    result = {}
+
+    def go():
+        try:
+            isolated.run("selftest", "x", {"sleep": 30}, gentle=False, tag="call-1")
+            result["r"] = "finished"
+        except isolated.Cancelled:
+            result["r"] = "cancelled"
+
+    t = threading.Thread(target=go)
+    t.start()
+    for _ in range(100):
+        if "call-1" in isolated._running:
+            break
+        time.sleep(0.05)
+    assert isolated.cancel("call-1")
+    t.join(10)
+    assert result["r"] == "cancelled"
+    assert not isolated.cancel("call-1")
+
+
+def test_diarization_progress_hook(monkeypatch):
+    import sys
+    import types
+
+    from concall import diarize
+
+    seen = []
+
+    class FakeAnnotation:
+        def itertracks(self, yield_label=False):
+            seg = types.SimpleNamespace(start=0.0, end=1.0)
+            return iter([(seg, None, "SPEAKER_00")])
+
+    class FakePipeline:
+        embedding_batch_size = 1
+
+        def __call__(self, audio, hook=None):
+            hook("segmentation", None, total=10, completed=5)
+            hook("embeddings", None, total=4, completed=2)
+            hook("discrete_diarization", None)
+            return FakeAnnotation()
+
+    pipe = FakePipeline()
+    monkeypatch.setattr(diarize, "load_pipeline", lambda device=None: pipe)
+    monkeypatch.setattr(diarize, "_read_wav", lambda p: {})
+    monkeypatch.setitem(sys.modules, "torch", types.SimpleNamespace(set_num_threads=lambda n: None))
+    segs = diarize.diarize("x.wav", gentle=True, progress=seen.append)
+    assert segs == [{"s": 0.0, "e": 1.0, "spk": "SPEAKER_00"}]
+    assert pipe.embedding_batch_size == 32
+    assert seen == sorted(seen) and seen[-1] == 1.0 and 0.1 < seen[0] < 0.2

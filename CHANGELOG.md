@@ -2,6 +2,11 @@
 
 Each `## <version>` section becomes the release notes shown in the app's update screen.
 
+## 0.3.2
+- The transcript opens as soon as cloud transcription finishes (about a minute); speaker separation continues in the background and the speaker names appear when it's done.
+- Speaker separation shows real progress (it used to sit at 82% with no sign of life) and has a **Skip** button.
+- Speaker separation is much faster: it now processes audio in batches, and gentle mode uses a few normal CPU cores at low priority instead of only the slowest ones.
+
 ## 0.3.1
 - Fixed: connecting Groq failed with "Groq rejected this key" even for valid keys. Groq's firewall was blocking the app's requests; the app now identifies itself properly.
 - Clearer Groq error messages (an invalid key vs. a blocked request).

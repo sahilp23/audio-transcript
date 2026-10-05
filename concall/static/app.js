@@ -392,6 +392,8 @@ const Player = {
       if (state.page !== "call") return;
       const m = await api.get(`/api/calls/${this.id}`).catch(() => null);
       if (!m) return;
+      const sp = $("#speaker-progress");
+      if (sp && m.status === "processing") sp.textContent = m.stage || "Separating speakers";
       if (m.status === "ready" || m.status === "error") {
         const t = this.audio.currentTime, playing = !this.audio.paused;
         this.meta = m;
@@ -633,6 +635,9 @@ const Player = {
   renderTranscript() {
     const doc = this.doc, out = [];
     const banners = [];
+    if (this.meta.speakers_pending) {
+      banners.push(`<div class="banner" id="speaker-banner"><span><span class="spinner"></span> <b id="speaker-progress">${esc(this.meta.stage || "Separating speakers")}</b>. The transcript is ready to read; speaker names will appear when this finishes.</span><button class="btn small" id="skip-speakers">Skip</button></div>`);
+    }
     if (!this.meta.has_official) {
       banners.push(`<div class="banner"><span>Auto transcript from the recording. When the company publishes its transcript, attach it for exact wording and speaker names — the audio sync is kept.</span><button class="btn small" onclick="$('#attach-btn').click()">Attach</button></div>`);
     }
@@ -666,6 +671,12 @@ const Player = {
     });
     if (!this.paras.length) out.push(`<div class="empty">No speech found in this recording.</div>`);
     $("#transcript").innerHTML = out.join("");
+    $("#skip-speakers")?.addEventListener("click", async (e) => {
+      if (!confirm("Skip speaker separation for this call? You can run it later from the Speakers tab.")) return;
+      e.target.disabled = true;
+      try { await api.post(`/api/calls/${this.id}/skip_speakers`); toast("Stopping speaker separation…"); }
+      catch (err) { toast(err.message); }
+    });
     this.wordEls = $$("#transcript .w");
     this.paraEls = $$("#transcript .para");
     this.cur = -1; this.curPara = -1;
