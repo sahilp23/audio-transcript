@@ -216,8 +216,12 @@ def download_speaker_model() -> Task:
     def work(task: Task):
         from . import diarize
 
-        task.message = "Downloading speaker models…"
-        diarize.load_pipeline()  # downloads and caches the weights
+        from . import isolated
+
+        task.message = "Downloading and checking speaker models…"
+        # Load the pipeline in a separate process: downloads the weights and proves they
+        # load, without keeping ~1 GB of models in the app's memory.
+        isolated.run("load_speakers", "-", {}, gentle=False)
 
     return _start("speaker_model", work)
 

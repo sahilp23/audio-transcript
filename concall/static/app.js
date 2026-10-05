@@ -141,6 +141,7 @@ function statusBadges(c) {
   if (c.status === "ready") {
     b.push(c.has_official ? `<span class="badge ok">Official transcript</span>` : `<span class="badge warn">Auto transcript</span>`);
   } else if (c.status === "error") b.push(`<span class="badge err">Failed</span>`);
+  else if (c.status === "needs_input") b.push(`<span class="badge warn">Needs your OK</span>`);
   else b.push(`<span class="badge accent">${esc(c.stage || "Processing")}</span>`);
   if (c.duration) b.push(`<span class="badge">${fmtTime(c.duration)}</span>`);
   return b.join("");
@@ -156,6 +157,29 @@ function callCard(c) {
       <div class="badges">${statusBadges(c)}</div>
       ${busy ? `<div class="progress"><div style="width:${Math.round((c.progress || 0) * 100)}%"></div></div>` : ""}
     </div>`;
+}
+
+function decisionHtml(meta) {
+  const gentleDefault = Settings.setup?.mac?.gentle ?? true;
+  return `<div class="decision">
+      <div class="title">Transcribe on this Mac instead?</div>
+      <p class="small">${esc(meta.decision?.reason || "Cloud transcription isn't available right now.")}</p>
+      <div class="row-actions center-row">
+        <button class="btn primary" data-choice="local_gentle">Use this Mac (gentle)</button>
+        <button class="btn" data-choice="local">Use this Mac (fast)</button>
+        <button class="btn ghost" data-choice="retry">Try the cloud again</button>
+      </div>
+      <p class="muted small"><b>Gentle</b> runs in the background on the Mac's efficiency cores, so the Mac stays usable, but a 1-hour call can take an hour or more.
+      <b>Fast</b> uses the Mac's graphics chip: quicker, but the Mac may lag while it runs${gentleDefault ? " (likely on an 8 GB Mac)" : ""}.
+      <br>Or <a href="#/settings">connect / check Groq in Settings</a>; waiting calls start automatically once it's connected.</p>
+    </div>`;
+}
+
+function wireDecision(root, callId, after) {
+  $$("[data-choice]", root).forEach((b) => (b.onclick = async () => {
+    try { await api.post(`/api/calls/${callId}/decision`, { choice: b.dataset.choice }); after && after(); }
+    catch (e) { toast(e.message); }
+  }));
 }
 
 function cardMenu(anchor, id) {
@@ -340,7 +364,7 @@ const Player = {
 
     if (!doc) {
       this.renderProcessing(meta);
-      if (meta.status !== "error") state.pollTimer = setTimeout(() => this.open(id), 2000);
+      if (meta.status !== "error") state.pollTimer = setTimeout(() => this.open(id), meta.status === "needs_input" ? 4000 : 2000);
       return;
     }
     this.user = await api.get(`/api/calls/${id}/user`).catch(() => ({}));
@@ -386,20 +410,27 @@ const Player = {
 
   renderProcessing(meta) {
     const pct = Math.round((meta.progress || 0) * 100);
-    const failed = meta.status === "error";
     $("#player").classList.add("hidden");
+    let body;
+    if (meta.status === "error") {
+      body = `<p class="error">Processing failed: ${esc(meta.error)}</p>
+        <div class="row-actions center-row"><button class="btn primary" id="retry-btn">Retry</button>
+        <button class="btn" data-report="${esc(meta.error)}">Report this problem</button></div>`;
+    } else if (meta.status === "needs_input") {
+      body = decisionHtml(meta);
+    } else {
+      body = `<div class="progress"><div style="width:${pct}%"></div></div>
+        <p><strong>${esc(meta.stage || "Processing")}</strong> — ${pct}%</p>
+        <p class="muted small">You can leave this page; processing continues in the background, and you'll get a notification when it's done.</p>`;
+    }
     $("#view").innerHTML = `
       <div class="processing">
         <h2>${esc(meta.company)} · ${esc(meta.period || "")}</h2>
-        ${failed ? `<p class="error">Processing failed: ${esc(meta.error)}</p>
-          <button class="btn primary" id="retry-btn">Retry</button>`
-        : `<div class="progress"><div style="width:${pct}%"></div></div>
-          <p><strong>${esc(meta.stage || "Processing")}</strong> — ${pct}%</p>
-          <p class="muted small">Time depends on your Mac and the call length. The very first run also downloads the speech model (about 1.6 GB), so it takes longer.
-          You can leave this page; processing continues in the background.</p>`}
+        ${body}
         <p><a href="#/">← Back to library</a></p>
       </div>`;
     $("#retry-btn")?.addEventListener("click", async () => { await api.post(`/api/calls/${meta.id}/retry`); this.open(meta.id); });
+    wireDecision($("#view"), meta.id, () => this.open(meta.id));
   },
 
   /* ---------- data ---------- */
@@ -456,7 +487,7 @@ const Player = {
   renderPage() {
     const m = this.meta;
     $("#view").innerHTML = `
-      <div class="call-page">
+      <div class="call-page ${sidePanelHidden() ? "side-hidden" : ""}">
         <aside class="sidebar">
           <div class="side-head">
             <h1 class="company-name">${esc(m.company)}</h1>
@@ -475,6 +506,7 @@ const Player = {
         </aside>
         <section class="main-col">
           <div class="toolbar">
+            <button class="icon-btn" id="side-toggle" title="Show/hide the side panel (chapters, key numbers, notes…)"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></svg></button>
             <button class="icon-btn" id="copy-btn" title="Copy transcript"><svg viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg></button>
             <button class="icon-btn" id="download-btn" title="Download transcript (.md)"><svg viewBox="0 0 24 24"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg></button>
             <span class="sep"></span>
@@ -518,6 +550,12 @@ const Player = {
     $("#copy-btn").onclick = () => copyText(this.exportText(false)).then(() => toast("Transcript copied"), () => toast("Copy failed"));
     $("#download-btn").onclick = () => this.download();
     $("#help-btn").onclick = () => $("#help-dialog").showModal();
+    $("#side-toggle").onclick = () => {
+      const page = $(".call-page");
+      const hidden = !page.classList.contains("side-hidden");
+      page.classList.toggle("side-hidden", hidden);
+      try { localStorage.setItem("sidePanelHidden", hidden ? "1" : "0"); } catch {}
+    };
     $("#follow-btn").onclick = () => { this.follow = true; $("#follow-btn").classList.add("hidden"); this.scrollToCurrent(true); };
 
     const fi = $("#find-input");
@@ -598,7 +636,7 @@ const Player = {
     if (!this.meta.has_official) {
       banners.push(`<div class="banner"><span>Auto transcript from the recording. When the company publishes its transcript, attach it for exact wording and speaker names — the audio sync is kept.</span><button class="btn small" onclick="$('#attach-btn').click()">Attach</button></div>`);
     }
-    for (const w of this.meta.warnings || []) banners.push(`<div class="banner warn">${esc(w)}</div>`);
+    for (const w of this.meta.warnings || []) banners.push(`<div class="banner warn"><span>${esc(w)}</span><button class="btn small" data-report="${esc(w)}">Report</button></div>`);
     out.push(banners.join(""));
 
     let ci = 0;
@@ -921,8 +959,10 @@ const Player = {
 
   setupAudio() {
     const a = this.audio;
-    const src = `/api/calls/${this.id}/audio`;
+    const clear = !!this.user.clear && this.meta.enhanced === "ready";
+    const src = `/api/calls/${this.id}/audio${clear ? "?clear=1" : ""}`;
     $("#player").classList.remove("hidden");
+    $("#pl-clear").classList.toggle("active", clear);
     this.syncPlayerTitle();
     this.renderTimeline();
     if (a.dataset.callId !== this.id) {
@@ -943,6 +983,42 @@ const Player = {
     if ("mediaSession" in navigator) {
       navigator.mediaSession.metadata = new MediaMetadata({ title: `${this.meta.period} earnings call`, artist: this.meta.company, album: "Concall Player" });
     }
+  },
+
+  async toggleClear() {
+    const btn = $("#pl-clear");
+    if (btn.classList.contains("busy")) return;
+    const turnOn = !this.user.clear || this.meta.enhanced !== "ready";
+    if (turnOn && this.meta.enhanced !== "ready") {
+      btn.classList.add("busy");
+      toast("Preparing clear-voice audio (takes up to a minute)…", 4000);
+      try {
+        await api.post(`/api/calls/${this.id}/enhance`);
+        const id = this.id;
+        for (;;) {
+          await new Promise((r) => setTimeout(r, 1500));
+          if (this.id !== id) return;
+          this.meta = await api.get(`/api/calls/${id}`);
+          if (this.meta.enhanced === "ready") break;
+          if (this.meta.enhanced === "error") throw new Error(this.meta.enhanced_error || "Couldn't clean up the audio");
+        }
+      } catch (e) { btn.classList.remove("busy"); toast(e.message, 5000); return; }
+      btn.classList.remove("busy");
+    }
+    this.user.clear = turnOn;
+    this.saveUser({ clear: turnOn });
+    this.swapSource(`/api/calls/${this.id}/audio${turnOn ? "?clear=1" : ""}`);
+    btn.classList.toggle("active", turnOn);
+    toast(turnOn ? "Clear voice on: less noise, steadier volume" : "Clear voice off: original audio");
+  },
+
+  swapSource(src) {
+    const a = this.audio, t = a.currentTime, playing = !a.paused, rate = a.playbackRate;
+    a.src = src;
+    a.addEventListener("loadedmetadata", () => {
+      a.currentTime = t; a.playbackRate = rate;
+      if (playing) a.play().catch(() => {});
+    }, { once: true });
   },
 
   syncPlayerTitle() {
@@ -1109,6 +1185,7 @@ function wirePlayerBar() {
   $("#pl-rate").onclick = () => Player.cycleRate(0);
   $("#pl-mute").onclick = () => { a.muted = !a.muted; $("#pl-mute").classList.toggle("active", a.muted); $("#pl-vol-waves").style.display = a.muted ? "none" : ""; };
   $("#pl-bookmark").onclick = () => Player.addBookmark();
+  $("#pl-clear").onclick = () => Player.toggleClear();
   $("#pl-chapter").onclick = () => {
     Player.tab = "chapters";
     $$("#side-tabs button").forEach((x) => x.classList.toggle("on", x.dataset.tab === "chapters"));
@@ -1176,6 +1253,12 @@ document.addEventListener("keydown", (e) => {
 
 const inApp = () => !!state.status?.app_mode;
 
+function sidePanelHidden() {
+  let saved = null;
+  try { saved = localStorage.getItem("sidePanelHidden"); } catch {}
+  return saved === null ? window.innerWidth < 900 : saved === "1";
+}
+
 async function copyText(text) {
   try { await navigator.clipboard.writeText(text); }
   catch { await api.post("/api/clipboard", { text }); }
@@ -1205,6 +1288,53 @@ document.addEventListener("click", (e) => {
   if (!a) return;
   e.preventDefault();
   openExternal(a.href);
+});
+
+/* ------------------------------------------------------------------ */
+/* Report a problem                                                    */
+/* ------------------------------------------------------------------ */
+
+const Report = {
+  open(errorText) {
+    this.error = errorText || "";
+    const f = $("#report-form");
+    f.reset();
+    $("#report-error-box").classList.toggle("hidden", !this.error);
+    $("#report-error-text").textContent = this.error;
+    $("#report-msg").textContent = "";
+    $("#report-dialog").showModal();
+    f.description.focus();
+  },
+  context() {
+    const ctx = { page: location.hash || "#/", error: this.error };
+    if (state.page === "call" && Player.meta) {
+      const m = Player.meta;
+      Object.assign(ctx, {
+        call: `${m.company} ${m.period || ""}`.trim(), call_status: m.status, call_stage: m.stage,
+        call_error: m.error, call_warnings: (m.warnings || []).join(" | "), transcript: m.has_official ? "official" : "auto",
+        duration_s: Math.round(m.duration || 0),
+      });
+    }
+    return ctx;
+  },
+  async submit(e) {
+    e.preventDefault();
+    const f = $("#report-form");
+    const btn = $("button[type=submit]", f);
+    btn.disabled = true;
+    try {
+      const r = await api.post("/api/report", { description: f.description.value, context: this.context() });
+      openExternal(r.url);
+      $("#report-dialog").close();
+      toast("Opened GitHub in your browser: check it and click “Submit new issue”.", 6000);
+    } catch (err) { $("#report-msg").textContent = err.message; }
+    finally { btn.disabled = false; }
+  },
+};
+
+document.addEventListener("click", (e) => {
+  const b = e.target.closest("[data-report]");
+  if (b) { e.preventDefault(); Report.open(b.dataset.report); }
 });
 
 /* ------------------------------------------------------------------ */
@@ -1241,6 +1371,9 @@ async function boot() {
   $("#upload-form").addEventListener("submit", (e) => Upload.submit(e));
   $("#transcript-form").addEventListener("submit", (e) => TranscriptDialog.submit(e));
   $("#edit-form").addEventListener("submit", (e) => EditDialog.submit(e));
+  wireDialog($("#report-dialog"));
+  $("#report-form").addEventListener("submit", (e) => Report.submit(e));
+  $("#report-btn").addEventListener("click", () => Report.open(""));
   $("#upload-btn").addEventListener("click", () => Upload.open());
   wirePlayerBar();
   try { state.status = await api.get("/api/status"); } catch {}

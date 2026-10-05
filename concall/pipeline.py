@@ -1,8 +1,12 @@
 """Background processing: audio prep -> speech-to-text -> speakers -> transcript doc.
 
-One job runs at a time (a laptop can only transcribe one call efficiently).
-Intermediate results are cached, so attaching an official transcript later only
-re-runs the cheap alignment step.
+Speech-to-text runs in the cloud (Groq) by default. If that isn't possible
+(not connected, offline, free limit reached) the call pauses with status
+"needs_input" and the app asks whether to use this Mac instead; the answer is
+stored as meta["asr_route"] ("local" or "local_gentle") and the job resumes.
+
+One job runs at a time. Intermediate results are cached, so attaching an
+official transcript later only re-runs the cheap alignment step.
 """
 
 import queue
@@ -10,7 +14,7 @@ import threading
 import traceback
 from pathlib import Path
 
-from . import asr, components, config, diarize, media, store, structure
+from . import asr, cloud, components, config, diarize, isolated, media, notify, store, structure
 
 BROWSER_AUDIO = {".mp3", ".m4a", ".aac", ".mp4", ".wav", ".ogg", ".oga", ".webm", ".flac", ".opus"}
 
@@ -59,9 +63,9 @@ def _worker() -> None:
 
 def process(call_id: str) -> None:
     d = store.call_dir(call_id)
-    meta = store.update_meta(call_id, status="processing", stage="Preparing audio", progress=0.02, error=None, warnings=[])
+    meta = store.update_meta(call_id, status="processing", stage="Preparing audio", progress=0.02, error=None)
     audio = d / meta["audio_file"]
-    warnings: list[str] = []
+    warnings: list[str] = list(meta.get("upload_warnings") or [])
 
     duration = media.duration(audio)
     play_file = meta["audio_file"]
@@ -76,29 +80,43 @@ def process(call_id: str) -> None:
     official = store.read_json(d / "official.json")
 
     try:
-        if not asr_path.exists() or (not diar_path.exists() and not official and diarize.wanted()):
-            media.run("-i", str(audio), "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", str(wav))
+        needs_local_asr = not asr_path.exists() and (meta.get("asr_route") or "cloud") != "cloud"
+        if needs_local_asr or (not diar_path.exists() and not official and diarize.wanted()):
+            media.run("-i", str(audio), "-vn", "-ac", "1", "-ar", "16000",
+                      "-af", cloud.SPEECH_FILTER, "-c:a", "pcm_s16le", str(wav))
 
         if not asr_path.exists():
-            def on_setup(msg: str, p) -> None:
-                store.update_meta(call_id, stage=msg, progress=round(0.02 + 0.03 * (p or 0), 3))
-
-            components.ensure_speech_ready(on_setup)
-            engine = asr.pick_engine()
-            store.update_meta(call_id, stage=f"Transcribing ({engine})", progress=0.05)
             names = [t["speaker"] for t in official["turns"]] if official else None
             prompt = asr.build_prompt(meta.get("company", ""), list(dict.fromkeys(names)) if names else None)
 
             def on_progress(p: float) -> None:
                 store.update_meta(call_id, progress=round(0.05 + 0.75 * p, 3))
 
-            try:
-                result = asr.transcribe(str(wav), duration, prompt, on_progress)
-            except Exception as exc:
-                raise RuntimeError(
-                    f"Speech-to-text failed ({exc}). On the first run the model is downloaded "
-                    "from huggingface.co, so check your internet connection and retry."
-                ) from exc
+            route = meta.get("asr_route") or "cloud"
+            if route == "cloud":
+                key = config.groq_key()
+                if not key:
+                    return ask_local(call_id, "Cloud transcription (Groq) isn't connected yet. Connect it in "
+                                              "Settings for fast transcription, or use this Mac.")
+                store.update_meta(call_id, stage="Transcribing in the cloud (Groq)", progress=0.05)
+                try:
+                    result = cloud.transcribe(str(audio), duration, prompt, key, on_progress)
+                except cloud.CloudUnavailable as exc:
+                    return ask_local(call_id, str(exc))
+            else:
+                gentle = route == "local_gentle"
+
+                def on_setup(msg: str, p) -> None:
+                    store.update_meta(call_id, stage=msg, progress=round(0.02 + 0.03 * (p or 0), 3))
+
+                components.ensure_speech_ready(on_setup)
+                store.update_meta(call_id, progress=0.05, stage=(
+                    "Transcribing on this Mac (gentle mode: slower, keeps the Mac usable)" if gentle
+                    else "Transcribing on this Mac"))
+                try:
+                    result = isolated.run("asr", str(wav), {"duration": duration, "prompt": prompt}, gentle, on_progress)
+                except Exception as exc:
+                    raise RuntimeError(f"Speech-to-text on this Mac failed: {exc}") from exc
             store.write_json(asr_path, result)
 
         # Speaker separation is only needed when there's no official transcript to name speakers.
@@ -109,8 +127,10 @@ def process(call_id: str) -> None:
                 store.update_meta(call_id, stage="Separating speakers", progress=0.82)
                 try:
                     components.ensure_speakers_ready(lambda msg, p: store.update_meta(call_id, stage=msg))
-                    store.update_meta(call_id, stage="Separating speakers", progress=0.82)
-                    store.write_json(diar_path, diarize.diarize(str(wav)))
+                    gentle = config.gentle_mode()
+                    store.update_meta(call_id, progress=0.82, stage=(
+                        "Separating speakers (gentle mode, keeps the Mac usable)" if gentle else "Separating speakers"))
+                    store.write_json(diar_path, isolated.run("diarize", str(wav), {}, gentle))
                 except Exception as exc:
                     traceback.print_exc()
                     warnings.append(f"Speaker separation failed: {exc}")
@@ -121,7 +141,22 @@ def process(call_id: str) -> None:
 
     store.update_meta(call_id, stage="Building transcript", progress=0.96)
     build_doc(call_id)
-    store.update_meta(call_id, status="ready", stage="Ready", progress=1.0, warnings=warnings)
+    meta = store.update_meta(call_id, status="ready", stage="Ready", progress=1.0, warnings=warnings, decision=None)
+    notify.send(f"{meta['company']} {meta.get('period', '')} is ready", "Transcript ready")
+
+
+def ask_local(call_id: str, reason: str) -> None:
+    """Pause the call and ask the user whether to transcribe on this Mac."""
+    meta = store.update_meta(call_id, status="needs_input", stage="Waiting for your OK", decision={"reason": reason})
+    notify.send(f"{meta['company']}: {reason}", "Transcribe on this Mac?")
+
+
+def decide(call_id: str, choice: str) -> dict:
+    if choice not in ("local", "local_gentle", "retry"):
+        raise ValueError("choice must be local, local_gentle or retry")
+    store.update_meta(call_id, asr_route=None if choice == "retry" else choice, decision=None)
+    enqueue(call_id)
+    return store.get_meta(call_id)
 
 
 def build_doc(call_id: str) -> dict:

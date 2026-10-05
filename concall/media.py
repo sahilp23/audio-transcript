@@ -10,6 +10,10 @@ from pathlib import Path
 
 from . import config
 
+# "Clear voice" playback: cut rumble and hiss, reduce steady background noise,
+# and even out loud and quiet speakers.
+CLEAR_VOICE_FILTER = "highpass=f=90,lowpass=f=7600,afftdn=nf=-25:tn=1,speechnorm=e=6:r=0.0001:l=1"
+
 
 def ensure_ffmpeg() -> str:
     found = shutil.which("ffmpeg")

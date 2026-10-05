@@ -86,7 +86,7 @@ def main() -> None:
 
         icon = os.environ.get("CONCALL_ICON")
         webview.create_window(
-            "Concall Player", url, width=1380, height=900, min_size=(900, 620), text_select=True,
+            "Concall Player", url, width=1380, height=900, min_size=(520, 480), text_select=True,
             background_color="#f6f6f8",
         )
         _mark_started()

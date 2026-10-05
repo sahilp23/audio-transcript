@@ -41,49 +41,94 @@ wait_for 1500 "speech engine installed and model downloaded" engine_ready
 AUDIO="$WORK/speech.aiff"
 say -o "$AUDIO" "Good afternoon everyone. Revenue grew eighteen percent this quarter, and EBITDA margins improved. We will now begin the question and answer session."
 
-ID=$(curl -sf "${H[@]}" -F company="Smoke Test" -F period="Q1" -F audio=@"$AUDIO" "$BASE/api/calls" | json "d['id']")
-call_done() { curl -sf "$BASE/api/calls/$ID" | json "d['status']" | grep -Eq "ready|error"; }
-wait_for 600 "call processed" call_done
-curl -sf "$BASE/api/calls/$ID" | json "d['status'], d.get('error')"
-TEXT=$(curl -sf "$BASE/api/calls/$ID/doc" | json "' '.join(w[0] for t in d['turns'] for p in t['paras'] for w in p['w'])")
-echo "Transcript: $TEXT"
+upload() { curl -sf "${H[@]}" -F company="Smoke Test" -F period="$1" -F audio=@"$AUDIO" "$BASE/api/calls" | json "d['id']"; }
+status_of() { curl -sf "$BASE/api/calls/$1" | json "d['status']"; }
+wait_status() {  # wait_status <id> <regex> <seconds>
+  local id="$1" want="$2" secs="$3"
+  for _ in $(seq 1 "$secs"); do
+    st=$(status_of "$id"); if echo "$st" | grep -Eq "$want"; then echo "$st"; return 0; fi
+    if [ "$st" = "error" ]; then curl -sf "$BASE/api/calls/$id" | json "d.get('error')"; return 1; fi
+    sleep 1
+  done
+  echo "✗ timed out waiting for $want (last: $st)"; return 1
+}
+text_of() { curl -sf "$BASE/api/calls/$1/doc" | json "' '.join(w[0] for t in d['turns'] for p in t['paras'] for w in p['w'])"; }
+decide() { curl -sf -X POST "${H[@]}" -H "Content-Type: application/json" -d "{\"choice\": \"$2\"}" "$BASE/api/calls/$1/decision" >/dev/null; }
+
+# 1. No cloud key: the app must ask before using the Mac, then transcribe locally (fast mode, GPU).
+ID=$(upload "Q1")
+wait_status "$ID" "needs_input" 120 >/dev/null
+echo "✓ asks before transcribing on the Mac"
+decide "$ID" local
+wait_status "$ID" "ready" 600 >/dev/null
+TEXT=$(text_of "$ID"); echo "Local (fast): $TEXT"
 echo "$TEXT" | grep -iq "revenue" || { echo "✗ transcript doesn't contain 'revenue'"; exit 1; }
-echo "✓ transcription works"
+echo "✓ local transcription (fast) works"
 
-# The CPU engine (fallback when the Mac GPU path fails) must work too.
-ASR_ENGINE=faster PYTHONPATH="$APP/Contents/Resources/app" "$CONCALL_SUPPORT_DIR/venv/bin/python" - "$AUDIO" <<'PY'
-import sys, tempfile, os
-from concall import asr, media
-wav = os.path.join(tempfile.mkdtemp(), "a.wav")
-media.run("-i", sys.argv[1], "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", wav)
-out = asr.transcribe(wav, 10.0, asr.build_prompt("Smoke Test"), lambda p: None)
-text = " ".join(w["w"] for w in out["words"])
-print("faster-whisper:", out["engine"], text)
-assert out["engine"] == "faster" and "revenue" in text.lower(), text
-PY
-echo "✓ CPU fallback engine works"
+# 2. Gentle mode: CPU engine at background priority in a separate process.
+ID2=$(upload "Q2")
+wait_status "$ID2" "needs_input" 120 >/dev/null
+decide "$ID2" local_gentle
+wait_status "$ID2" "ready" 900 >/dev/null
+TEXT=$(text_of "$ID2"); echo "Local (gentle): $TEXT"
+echo "$TEXT" | grep -iq "revenue" || { echo "✗ gentle transcript doesn't contain 'revenue'"; exit 1; }
+echo "✓ local transcription (gentle) works"
 
-# Speaker separation package (installed when the user connects Hugging Face).
+# 3. Clear voice audio.
+curl -sf -X POST "${H[@]}" "$BASE/api/calls/$ID/enhance" >/dev/null
+enhanced() { curl -sf "$BASE/api/calls/$ID" | json "d.get('enhanced')" | grep -Eq "ready|error"; }
+wait_for 300 "clear-voice audio finished" enhanced
+curl -sf "$BASE/api/calls/$ID" | json "d.get('enhanced'), d.get('enhanced_error')" | tee /dev/stderr | grep -q "ready"
+curl -sf -o /dev/null "$BASE/api/calls/$ID/audio?clear=1"
+echo "✓ clear voice works"
+
+# 4. Report a problem builds a GitHub issue link.
+curl -sf -X POST "${H[@]}" -H "Content-Type: application/json" -d '{"description": "smoke test", "context": {"error": "x"}}' \
+  "$BASE/api/report" | json "d['url']" | grep -q "github.com/.*/issues/new"
+echo "✓ report a problem works"
+
+# 5. Speaker separation package (installed when the user connects Hugging Face).
 curl -sf -X POST "${H[@]}" "$BASE/api/setup/speakers" >/dev/null
 speakers_done() { curl -sf "$BASE/api/setup" | json "d['components']['speakers']['state']" | grep -Eq "done|error"; }
 wait_for 1200 "speaker separation install finished" speakers_done
 curl -sf "$BASE/api/setup" | json "d['components']['speakers']"
 curl -sf "$BASE/api/setup" | json "d['components']['speakers']['installed']" | grep -q True
-"$CONCALL_SUPPORT_DIR/venv/bin/python" -c "from pyannote.audio import Pipeline; import torch; print('pyannote ok, torch', torch.__version__)"
 
-# Loading a model goes through pyannote's Hugging Face download code (needs our
-# compatibility patch). Uses a public pyannote model, so no token is needed.
+# Loading a pyannote model must work end to end (Hugging Face download + PyTorch
+# unpickling). This public model needs no token.
 PYTHONPATH="$APP/Contents/Resources/app" "$CONCALL_SUPPORT_DIR/venv/bin/python" - <<'PY'
 from concall import diarize
 diarize.patch_pyannote_hub()
 from pyannote.audio import Model
-try:
-    m = Model.from_pretrained("pyannote/wespeaker-voxceleb-resnet34-LM", use_auth_token=None)
-    print("pyannote model download ok:", type(m).__name__)
-except Exception as exc:
-    # A "gated"/permission error still proves the download call itself works.
-    assert "use_auth_token" not in str(exc) and "unexpected keyword" not in str(exc), exc
-    print("pyannote reached Hugging Face:", type(exc).__name__)
+with diarize.trusted_torch_load():
+    m = Model.from_pretrained("pyannote/wespeaker-voxceleb-resnet34-LM")
+assert m is not None
+print("pyannote model loaded:", type(m).__name__)
 PY
-echo "✓ speaker model download code works"
+echo "✓ speaker model loads"
+
+# 6. Optional, only when the repository has these secrets: Groq cloud and full speaker separation.
+if [ -n "${CI_GROQ_KEY:-}" ]; then
+  curl -sf -X POST "${H[@]}" -H "Content-Type: application/json" -d "{\"key\": \"$CI_GROQ_KEY\"}" "$BASE/api/groq/connect" | json "d['ok']" | grep -q True
+  ID3=$(upload "Q3")
+  wait_status "$ID3" "ready" 300 >/dev/null
+  TEXT=$(text_of "$ID3"); echo "Groq: $TEXT"
+  echo "$TEXT" | grep -iq "revenue"
+  echo "✓ Groq cloud transcription works"
+else
+  echo "- skipped Groq test (no CI_GROQ_KEY secret)"
+fi
+if [ -n "${CI_HF_TOKEN:-}" ]; then
+  curl -sf -X POST "${H[@]}" -H "Content-Type: application/json" -d "{\"token\": \"$CI_HF_TOKEN\"}" "$BASE/api/hf/connect" | json "d['ok']" | grep -q True
+  model_ready() { curl -sf "$BASE/api/setup" | json "d['components']['speaker_model']['state']" | grep -Eq "done|error"; }
+  wait_for 900 "speaker models downloaded" model_ready
+  curl -sf "$BASE/api/setup" | json "d['components']['speaker_model']" | tee /dev/stderr | grep -q "'done'"
+  curl -sf -X POST "${H[@]}" "$BASE/api/calls/$ID/speakers" >/dev/null
+  wait_status "$ID" "ready" 900 >/dev/null
+  curl -sf "$BASE/api/calls/$ID" | json "d.get('warnings')"
+  curl -sf "$BASE/api/calls/$ID/doc" | json "d['speakers_separated']" | grep -q True
+  echo "✓ speaker separation works"
+else
+  echo "- skipped full speaker separation test (no CI_HF_TOKEN secret)"
+fi
 echo "✓ all smoke tests passed"

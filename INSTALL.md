@@ -30,7 +30,13 @@ From then on it opens normally, like any other app. You can keep it in the Dock:
 - **About a minute:** it gets ready, then the window opens.
 - **A few more minutes, in the background:** it downloads the speech engine and model (about 2 GB in total). A purple badge at the top shows the progress. You can add a call straight away; it starts transcribing as soon as the setup is done.
 
-## 4. Optional: let the app tell speakers apart
+## 4. Recommended: connect free cloud transcription (Groq)
+
+Open **Settings** (the ⚙ gear at the top right) → **Transcription** and follow the 3 steps: create a free Groq account, create an API key, and paste it in. After that, a 1-hour call is transcribed in about a minute and your Mac stays free. The free plan covers roughly 8 hours of audio a day.
+
+If the cloud isn't available (no internet, or the daily free limit is used up), the app asks you before transcribing on your Mac. You can then choose **gentle** mode, which keeps the Mac usable but is slower, or **fast** mode.
+
+## 5. Optional: let the app tell speakers apart
 
 Open **Settings** (the ⚙ gear at the top right) → **Speaker separation**, and follow the 4 steps on screen. It takes about 3 minutes and uses a free Hugging Face account. The app checks each step and tells you if something is missing.
 
@@ -51,6 +57,8 @@ Everything stays on your Mac, in your user folder at
 To remove the app completely, delete it from Applications and delete that folder.
 
 ## If something goes wrong
+
+Click the **bug icon** at the top right (**Report a problem**), or the **Report** button next to an error. Describe what happened, then click **Continue to GitHub** → **Submit new issue**. The report includes the error and recent log lines, with your tokens and Mac user name removed. Then tell Claude to "fix the open issues".
 
 - **The app doesn't open after "Open Anyway":** open it again from Applications. The first launch needs internet.
 - **"Setup needs attention" badge:** open Settings and click **Try again**. This is usually an internet hiccup.

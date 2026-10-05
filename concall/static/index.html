@@ -15,6 +15,7 @@
     </a>
     <div class="topbar-right">
       <span id="engine-status" class="setup-pill hidden"></span>
+      <button class="icon-btn top-icon" id="report-btn" title="Report a problem"><svg viewBox="0 0 24 24"><path d="M8 7V5a4 4 0 0 1 8 0v2"/><rect x="6" y="7" width="12" height="13" rx="6"/><path d="M12 11v5M3 13h3M18 13h3M4 7l2.5 2M20 7l-2.5 2M4 20l2.5-2M20 20l-2.5-2"/></svg></button>
       <a href="#/settings" class="icon-btn top-icon" id="settings-btn" title="Settings"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></a>
       <button id="upload-btn" class="btn primary">+ Add call</button>
     </div>
@@ -50,6 +51,7 @@
     <div class="player-extra">
       <button class="btn ghost small" id="pl-rate" title="Playback speed ( [ / ] )">1×</button>
       <button class="icon-btn" id="pl-mute" title="Mute (M)"><svg viewBox="0 0 24 24"><path d="M4 9h4l5-4v14l-5-4H4z" fill="currentColor"/><path d="M16 9a4 4 0 0 1 0 6M18.5 6.5a7.5 7.5 0 0 1 0 11" id="pl-vol-waves"/></svg></button>
+      <button class="btn ghost small clear-btn" id="pl-clear" title="Clear voice: reduce background noise and even out volume">Clear voice</button>
       <button class="icon-btn" id="pl-bookmark" title="Bookmark this moment (B)"><svg viewBox="0 0 24 24"><path d="M6 3h12v18l-6-4-6 4z"/></svg></button>
     </div>
     <audio id="audio" preload="metadata"></audio>
@@ -114,6 +116,20 @@
       <div class="dialog-actions">
         <button type="button" class="btn ghost" data-close>Cancel</button>
         <button type="submit" class="btn primary">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="report-dialog" class="dialog">
+    <form method="dialog" id="report-form" class="dialog-body">
+      <h2>Report a problem</h2>
+      <div id="report-error-box" class="report-error hidden"><div class="small muted">Error</div><div id="report-error-text"></div></div>
+      <label>What were you doing, and what went wrong?<textarea name="description" rows="4" placeholder="e.g. Uploaded the Q1 call, it got stuck at 40%…"></textarea></label>
+      <p class="muted small">This opens a pre-filled issue on the project's GitHub page in your browser; you check it and click <b>Submit</b>. It includes the error, app version, macOS version and recent log lines. Your tokens and Mac user name are removed. The GitHub page is public.</p>
+      <p class="error small" id="report-msg"></p>
+      <div class="dialog-actions">
+        <button type="button" class="btn ghost" data-close>Cancel</button>
+        <button type="submit" class="btn primary">Continue to GitHub</button>
       </div>
     </form>
   </dialog>

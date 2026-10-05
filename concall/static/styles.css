@@ -345,3 +345,24 @@ ol.plain { padding-left: 20px; margin: 6px 0; display: grid; gap: 6px; }
 .update-box .notes { font-size: 13.5px; color: var(--text-2); max-height: 220px; overflow: auto; margin-bottom: 8px; }
 .update-box .notes h2 { font-size: 14px; margin: 8px 0 4px; }
 .center { text-align: center; }
+
+/* ---------- Decisions, report, clear voice ---------- */
+.decision { border: 1px solid var(--border); background: var(--surface); border-radius: var(--radius); padding: 18px 20px; text-align: left; margin: 18px 0; box-shadow: var(--shadow); }
+.decision .title { font-weight: 650; font-size: 16px; margin-bottom: 4px; }
+.center-row { justify-content: center; }
+.decision .center-row { justify-content: flex-start; }
+.report-error { background: color-mix(in srgb, var(--bad) 10%, var(--surface)); border-radius: 8px; padding: 8px 10px; font-size: 13px; max-height: 140px; overflow: auto; word-break: break-word; }
+.player .clear-btn { border: 1px solid rgba(255, 255, 255, .25); }
+.player .clear-btn.active { background: #fff; color: #111; border-color: #fff; }
+.player .clear-btn.busy { opacity: .6; cursor: progress; }
+.banner .btn { flex: none; }
+@media (max-width: 900px) {
+  .player-extra .clear-btn { padding: 4px 8px; }
+}
+.mode-box { border-top: 1px solid var(--border); margin-top: 8px; padding-top: 10px; display: grid; gap: 8px; }
+.mode-box .title { font-weight: 600; font-size: 14.5px; }
+label.radio { display: flex; gap: 10px; align-items: flex-start; cursor: pointer; font-size: 14px; }
+label.radio input { margin-top: 3px; }
+.call-page.side-hidden { grid-template-columns: 1fr; grid-template-rows: 1fr; }
+.call-page.side-hidden .sidebar { display: none; }
+#report-msg:empty { display: none; }

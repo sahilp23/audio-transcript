@@ -2,6 +2,16 @@
 
 Each `## <version>` section becomes the release notes shown in the app's update screen.
 
+## 0.3.0
+- **Fast cloud transcription (free):** connect a free Groq account in Settings and a 1-hour call is transcribed in about a minute, without slowing your Mac.
+- If the cloud isn't available, the app now **asks first** before using your Mac, and offers a **gentle mode** that keeps the Mac usable (slower).
+- Speaker separation and on-Mac transcription run in the background at low priority and give their memory back when done (better on 8 GB Macs).
+- Fixed: speaker separation failing with "Weights only load failed".
+- **Clear voice** button in the player: less background noise, steadier volume. Audio is also lightly cleaned up before transcription.
+- **Report a problem** button (bug icon, top right): opens a pre-filled GitHub issue with the error and recent log lines, with tokens and your user name removed.
+- The window can now be resized to half the screen; the side panel can be hidden (and starts hidden in narrow windows).
+- Notifications when a transcript is ready or needs your OK.
+
 ## 0.2.0
 - Concall Player is now a Mac app: download, drag to Applications, double-click.
 - Speech engine and model install themselves on first launch, with progress in the app.

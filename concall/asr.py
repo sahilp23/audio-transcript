@@ -1,8 +1,11 @@
-"""Speech-to-text with word-level timestamps, fully local.
+"""Speech-to-text on this Mac, with word-level timestamps.
 
 Engines:
-  mlx     mlx-whisper, runs on the Apple Silicon GPU (fastest on an M1/M2/M3 Mac)
-  faster  faster-whisper, CPU (works on any machine, slower)
+  mlx     mlx-whisper on the Apple Silicon GPU (fast, but heavy on an 8 GB Mac)
+  faster  faster-whisper on the CPU (used for "gentle" mode and as a fallback)
+
+Normally the app transcribes in the cloud (cloud.py); this runs when you choose
+the Mac instead. It's called inside a separate process (isolated.py).
 """
 
 import sys
@@ -39,8 +42,9 @@ def build_prompt(company: str = "", names: Optional[list[str]] = None) -> str:
     return " ".join(parts)
 
 
-def transcribe(wav_path: str, duration: float, prompt: str, progress: ProgressFn) -> dict:
-    engine = pick_engine()
+def transcribe(wav_path: str, duration: float, prompt: str, progress: ProgressFn,
+               engine: Optional[str] = None, threads: Optional[int] = None) -> dict:
+    engine = engine or pick_engine()
     if engine == "mlx":
         try:
             words = _transcribe_mlx(wav_path, duration, prompt, progress)
@@ -53,10 +57,10 @@ def transcribe(wav_path: str, duration: float, prompt: str, progress: ProgressFn
                 raise exc
             print(f"mlx-whisper failed ({exc}); falling back to faster-whisper on CPU", flush=True)
             engine = "faster"
-            words = _transcribe_faster(wav_path, duration, prompt, progress)
+            words = _transcribe_faster(wav_path, duration, prompt, progress, threads)
             model = config.FASTER_WHISPER_MODEL
     elif engine == "faster":
-        words = _transcribe_faster(wav_path, duration, prompt, progress)
+        words = _transcribe_faster(wav_path, duration, prompt, progress, threads)
         model = config.FASTER_WHISPER_MODEL
     else:
         raise ValueError(f"Unknown ASR_ENGINE {engine!r} (use auto, mlx or faster)")
@@ -128,10 +132,11 @@ def _read_wav(path: str):
     return np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32768.0
 
 
-def _transcribe_faster(wav_path: str, duration: float, prompt: str, progress: ProgressFn) -> list[dict]:
+def _transcribe_faster(wav_path: str, duration: float, prompt: str, progress: ProgressFn,
+                       threads: Optional[int] = None) -> list[dict]:
     from faster_whisper import WhisperModel
 
-    model = WhisperModel(config.FASTER_WHISPER_MODEL, device="auto", compute_type="int8")
+    model = WhisperModel(config.FASTER_WHISPER_MODEL, device="cpu", compute_type="int8", cpu_threads=threads or 0)
     segments, _info = model.transcribe(
         _read_wav(wav_path),  # decoded here: faster-whisper's own decoder breaks with some PyAV versions
         language="en",

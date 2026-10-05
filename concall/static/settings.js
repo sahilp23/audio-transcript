@@ -76,10 +76,17 @@ const Settings = {
         <a href="#/" class="back">← Your calls</a>
         <h1>Settings</h1>
 
+        <section class="card" id="groq-card">
+          <h2>Transcription <span class="badge">cloud via Groq · free</span></h2>
+          <p class="muted small">Calls are transcribed on Groq's servers with the same Whisper model: a 1-hour call takes about a minute and your Mac stays free. The free plan covers roughly 8 hours of audio a day. The call audio is uploaded to Groq for this.</p>
+          <div id="groq-body"></div>
+        </section>
+
         <section class="card">
-          <h2>Speech engine</h2>
-          <p class="muted small">Turns the call audio into text, on your Mac. Downloaded once, then works offline.</p>
+          <h2>On this Mac</h2>
+          <p class="muted small">Used when the cloud isn't available (you're asked first), and for speaker separation.</p>
           <div id="setup-speech"></div>
+          <div id="mac-mode"></div>
         </section>
 
         <section class="card" id="hf-card">
@@ -105,6 +112,7 @@ const Settings = {
           <div class="row-actions">
             <button class="btn small" id="reveal-data">Show in Finder</button>
             ${st.app_mode ? `<button class="btn small ghost" id="reveal-logs">Open log files</button>` : ""}
+            <button class="btn small ghost" data-report="">Report a problem</button>
           </div>
         </section>
         <p class="muted small center">Concall Player ${esc(st.version || "")}</p>
@@ -125,6 +133,8 @@ const Settings = {
         (c.speech_model.repo ? this.statusRow(`Speech model <span class="muted small">(${esc(c.speech_model.repo.split("/").pop())}, about 1.6 GB)</span>`, c.speech_model, "speech_model") : "");
       $$("[data-retry]", sp).forEach((b) => (b.onclick = () => this.start(b.dataset.retry)));
     }
+    this.renderGroq();
+    this.renderMacMode();
     const hf = $("#hf-body");
     // Don't redraw the form while you're typing the token.
     if (hf && !hf.contains(document.activeElement)) this.renderHf();
@@ -139,14 +149,14 @@ const Settings = {
     } else if (comp.state === "error") {
       icon = `<span class="dot err">!</span>`;
       text = `<span class="error">${esc(comp.error || "Failed")}</span>`;
-      extra = `<button class="btn small" data-retry="${key}">Try again</button>`;
+      extra = `<button class="btn small" data-retry="${key}">Try again</button> <button class="btn small ghost" data-report="${esc(title.replace(/<[^>]+>/g, "") + ": " + (comp.error || ""))}">Report</button>`;
     } else if (comp.installed || comp.state === "done") {
       icon = `<span class="dot ok">✓</span>`; text = "Ready";
     } else {
       icon = `<span class="dot"></span>`; text = "Not installed yet";
       extra = `<button class="btn small" data-retry="${key}">Install now</button>`;
     }
-    return `<div class="status-row">${icon}<div class="grow"><div class="title">${title}</div><div class="small muted">${text}</div>${extra.startsWith("<div") ? extra : ""}</div>${extra.startsWith("<button") ? extra : ""}</div>`;
+    return `<div class="status-row">${icon}<div class="grow"><div class="title">${title}</div><div class="small muted">${text}</div>${extra.startsWith("<div") ? extra : ""}</div>${extra.startsWith("<button") ? `<div class="row-actions" style="margin:0">${extra}</div>` : ""}</div>`;
   },
 
   async start(key) {
@@ -221,6 +231,61 @@ const Settings = {
       if (this.hfResult.ok) toast("All set. Setting up speaker separation…", 4000);
       this.refresh();
     });
+  },
+
+  renderGroq() {
+    const el = $("#groq-body");
+    if (!el || el.contains(document.activeElement) || !this.setup.groq) return;
+    const g = this.setup.groq;
+    if (g.connected) {
+      el.innerHTML = `
+        <div class="status-row"><span class="dot ok">✓</span><div class="grow">
+          <div class="title">Connected</div><div class="small muted">Key ${esc(g.key_hint)}. New calls are transcribed in the cloud.</div></div>
+          <button class="btn small ghost" id="groq-disconnect">Disconnect</button></div>`;
+      $("#groq-disconnect").onclick = async () => {
+        if (!confirm("Disconnect Groq? New calls will ask before transcribing on this Mac.")) return;
+        await api.post("/api/groq/disconnect"); this.refresh();
+      };
+      return;
+    }
+    el.innerHTML = `
+      <ol class="steps">
+        <li class="step"><span class="num">1</span><div class="grow"><div class="title">Create a free Groq account</div>
+          <div class="small muted">Sign in with Google or email. No card needed for the free plan.</div><a class="btn small" href="${esc(g.signup_url)}">Open console.groq.com</a></div></li>
+        <li class="step"><span class="num">2</span><div class="grow"><div class="title">Create an API key</div>
+          <div class="small muted">Create a new API key, give it any name (e.g. “Concall Player”) and copy it. Groq shows the key only once.</div><a class="btn small" href="${esc(g.keys_url)}">Open the API keys page</a></div></li>
+        <li class="step"><span class="num">3</span><div class="grow"><div class="title">Paste the key here</div>
+          <div class="token-row"><input id="groq-key" type="password" placeholder="gsk_…" autocomplete="off" spellcheck="false">
+          <button class="btn primary small" id="groq-connect">Connect</button></div>
+          <div id="groq-msg" class="small">${this.groqError ? `<span class="error">${esc(this.groqError)}</span>` : ""}</div></div></li>
+      </ol>`;
+    const connect = async () => {
+      $("#groq-msg").innerHTML = `<span class="spinner"></span> Checking the key with Groq…`;
+      try {
+        const r = await api.post("/api/groq/connect", { key: $("#groq-key").value.trim() });
+        this.groqError = r.ok ? "" : r.error;
+        if (r.ok) toast("Groq connected. Calls waiting for transcription start now.", 4000);
+      } catch (e) { this.groqError = e.message; }
+      $("#groq-key").blur();
+      this.refresh();
+    };
+    $("#groq-connect").onclick = connect;
+    $("#groq-key").addEventListener("keydown", (e) => { if (e.key === "Enter") connect(); });
+  },
+
+  renderMacMode() {
+    const el = $("#mac-mode");
+    if (!el || !this.setup.mac) return;
+    const m = this.setup.mac;
+    const opt = (v, label, desc) => `<label class="radio"><input type="radio" name="mac-mode" value="${v}" ${m.mode === v ? "checked" : ""}>
+      <span><b>${label}</b><br><span class="small muted">${desc}</span></span></label>`;
+    el.innerHTML = `<div class="mode-box"><div class="title">How hard may it work?</div>
+      ${opt("auto", `Automatic (${m.gentle ? "gentle" : "fast"} on this Mac)`, `Gentle on Macs with 8 GB of memory, fast otherwise. This Mac has about ${m.ram_gb} GB.`)}
+      ${opt("gentle", "Gentle", "Background priority on the efficiency cores: the Mac stays usable, processing takes longer.")}
+      ${opt("fast", "Fast", "Uses the graphics chip and all cores: quicker, but the Mac may lag meanwhile.")}</div>`;
+    $$("input[name=mac-mode]", el).forEach((r) => (r.onchange = async () => {
+      await api.patch("/api/settings", { mac_mode: r.value }); this.refresh();
+    }));
   },
 
   async refresh() {

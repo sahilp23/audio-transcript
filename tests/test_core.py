@@ -136,11 +136,17 @@ def client(tmp_path, monkeypatch):
     server = reload_app(tmp_path, monkeypatch, DIARIZATION="off")
     from concall import asr as asr_mod
 
-    from concall import components
+    from concall import components, isolated
 
     fake, _diar, _dur = make_asr()
-    monkeypatch.setattr(asr_mod, "transcribe", lambda wav, dur, prompt, progress: (progress(1.0), fake)[1])
+    monkeypatch.setattr(asr_mod, "transcribe", lambda wav, dur, prompt, progress, **kw: (progress(1.0), fake)[1])
     monkeypatch.setattr(components, "ensure_speech_ready", lambda on_update=None: None)
+
+    def fake_isolated(kind, path, opts, gentle, on_progress=None):
+        assert kind == "asr"
+        return asr_mod.transcribe(path, opts["duration"], opts["prompt"], on_progress or (lambda p: None))
+
+    monkeypatch.setattr(isolated, "run", fake_isolated)
     from fastapi.testclient import TestClient
 
     with TestClient(server.app, headers={"X-Concall": "1"}) as c:
@@ -151,7 +157,7 @@ def _wait_ready(client, call_id, timeout=30):
     end = time.time() + timeout
     while time.time() < end:
         meta = client.get(f"/api/calls/{call_id}").json()
-        if meta["status"] in ("ready", "error"):
+        if meta["status"] in ("ready", "error", "needs_input"):
             return meta
         time.sleep(0.2)
     raise AssertionError("timed out")
@@ -174,8 +180,15 @@ def test_upload_then_attach_transcript_later(client):
     )
     assert r.status_code == 200, r.text
     call_id = r.json()["id"]
+    # No cloud key: the app asks before transcribing on this Mac.
+    meta = _wait_ready(client, call_id)
+    assert meta["status"] == "needs_input", meta
+    assert "Groq" in meta["decision"]["reason"]
+    assert client.post(f"/api/calls/{call_id}/decision", json={"choice": "nope"}).status_code == 400
+    client.post(f"/api/calls/{call_id}/decision", json={"choice": "local_gentle"})
     meta = _wait_ready(client, call_id)
     assert meta["status"] == "ready", meta
+    assert meta["asr_route"] == "local_gentle"
     assert meta["has_official"] is False
     doc = client.get(f"/api/calls/{call_id}/doc").json()
     assert doc["source"] == "asr"
@@ -212,8 +225,9 @@ def test_upload_with_bad_transcript_still_processes(client):
         files={"audio": ("call.mp3", io.BytesIO(_wav_bytes()), "audio/mpeg")},
     )
     meta = _wait_ready(client, r.json()["id"])
-    assert meta["status"] == "ready"
+    assert meta["status"] == "needs_input"
     assert meta["has_official"] is False
+    assert "Transcript ignored" in " ".join(meta.get("warnings") or [])
 
 
 def test_api_rejects_cross_site_posts(client):
@@ -361,3 +375,119 @@ def test_pyannote_hub_compat_translates_old_token_argument():
     assert shim("pyannote/x", "config.yaml", use_auth_token="hf_1", cache_dir=None) == "/tmp/x"
     assert shim("pyannote/y", "pytorch_model.bin") == "/tmp/x"
     assert calls == [("pyannote/x", "config.yaml", "hf_1"), ("pyannote/y", "pytorch_model.bin", None)]
+
+
+def test_cloud_route_and_fallback_question(client, monkeypatch):
+    from concall import cloud, config
+
+    config.save_settings({"groq_key": "gsk_test"})
+    fake, _d, _ = make_asr()
+    calls = []
+
+    def fake_cloud(audio, duration, prompt, key, progress):
+        calls.append(key)
+        if len(calls) == 1:
+            raise cloud.CloudUnavailable("Groq's free limit is used up for now (resets in about 30 min).")
+        progress(1.0)
+        return {"engine": "groq", "model": cloud.MODEL, "words": fake["words"]}
+
+    monkeypatch.setattr(cloud, "transcribe", fake_cloud)
+    r = client.post("/api/calls", data={"company": "Demo", "period": "Q1"},
+                    files={"audio": ("call.mp3", io.BytesIO(_wav_bytes()), "audio/mpeg")})
+    call_id = r.json()["id"]
+    meta = _wait_ready(client, call_id)
+    assert meta["status"] == "needs_input" and "free limit" in meta["decision"]["reason"]
+    client.post(f"/api/calls/{call_id}/decision", json={"choice": "retry"})
+    meta = _wait_ready(client, call_id)
+    assert meta["status"] == "ready", meta
+    assert calls == ["gsk_test", "gsk_test"]
+    doc = client.get(f"/api/calls/{call_id}/doc").json()
+    assert doc["turns"]
+
+
+def test_cloud_chunks_and_stitches(tmp_path, monkeypatch):
+    from concall import cloud, media
+
+    audio = tmp_path / "a.mp3"
+    audio.write_bytes(_wav_bytes(25))
+    monkeypatch.setattr(cloud, "CHUNK", 10.0)
+    sent = []
+
+    def fake_chunk(path, key, prompt):
+        sent.append(round(media.duration(path), 1))
+        # Every chunk "hears" a word at its start and one at 5 s.
+        return {"words": [{"word": "hello", "start": 0.5, "end": 0.9}, {"word": "world", "start": 5.0, "end": 5.4}],
+                "segments": [{"text": " Hello, world.", "start": 0.0, "end": 6.0}]}
+
+    monkeypatch.setattr(cloud, "_transcribe_chunk", fake_chunk)
+    out = cloud.transcribe(str(audio), 25.0, "p", "gsk_x", lambda p: None)
+    assert sent == [10.0, 12.0, 7.0]  # chunks after the first start 2 s early (overlap)
+    starts = [w["s"] for w in out["words"]]
+    assert starts == sorted(starts)
+    # Later chunks' "hello" sits in the 2 s overlap (before their own span) and is dropped.
+    assert [(w["w"], w["s"]) for w in out["words"]] == [("Hello,", 0.5), ("world.", 5.0), ("world.", 13.0), ("world.", 23.0)]
+    assert out["engine"] == "groq"
+
+
+def test_cloud_key_check_rejects_bad_format():
+    from concall import cloud
+
+    assert not cloud.check_key("")["ok"]
+    assert "gsk_" in cloud.check_key("abc")["error"]
+
+
+def test_report_redacts_and_builds_issue_link(client, monkeypatch, tmp_path):
+    import urllib.parse
+
+    from concall import report
+
+    log = tmp_path / "app.log"
+    log.write_text("starting\nError with token hf_abcdefghijklmnop and gsk_ABCDEFGH12345 in /Users/sahil/Library/x\n")
+    monkeypatch.setattr(report, "LOG_FILE", log)
+    r = client.post("/api/report", json={"description": "Speaker separation failed", "context": {"error": "Weights only load failed"}}).json()
+    assert r["url"].startswith("https://github.com/sahilp23/audio-transcript/issues/new?")
+    body = urllib.parse.parse_qs(urllib.parse.urlparse(r["url"]).query)["body"][0]
+    assert "Weights only load failed" in body and "Speaker separation failed" in body
+    assert "hf_abcdefghijklmnop" not in body and "gsk_ABCDEFGH12345" not in body and "/Users/sahil" not in body
+    assert Path(r["path"]).exists()
+
+
+def test_isolated_runs_in_child_process():
+    from concall import isolated
+
+    seen = []
+    out = isolated.run("selftest", "abc", {}, gentle=True, on_progress=seen.append)
+    assert out == {"input": "abc", "gentle": True}
+    assert seen == [0.5, 1.0]
+
+
+def test_trusted_torch_load_forces_full_unpickling(monkeypatch):
+    import sys
+    import types
+
+    from concall import diarize
+
+    calls = []
+    fake_torch = types.SimpleNamespace(load=lambda *a, **k: calls.append(k) or "ok")
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+    original = fake_torch.load
+    with diarize.trusted_torch_load():
+        assert fake_torch.load("x", weights_only=True) == "ok"
+    assert calls == [{"weights_only": False}]
+    assert fake_torch.load is original
+
+
+def test_enhance_creates_clear_voice_audio(client):
+    r = client.post("/api/calls", data={"company": "Demo", "period": "Q1"},
+                    files={"audio": ("call.mp3", io.BytesIO(_wav_bytes(4)), "audio/mpeg")})
+    call_id = r.json()["id"]
+    _wait_ready(client, call_id)
+    client.post(f"/api/calls/{call_id}/enhance")
+    for _ in range(100):
+        meta = client.get(f"/api/calls/{call_id}").json()
+        if meta.get("enhanced") in ("ready", "error"):
+            break
+        time.sleep(0.1)
+    assert meta["enhanced"] == "ready", meta
+    a = client.get(f"/api/calls/{call_id}/audio?clear=1")
+    assert a.status_code == 200 and len(a.content) > 1000

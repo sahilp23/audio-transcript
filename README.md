@@ -64,7 +64,10 @@ Speaker roles are read from the participants list on the first page. Page header
 |---|---|
 | `concall/server.py` | Local web server (FastAPI): all `/api/...` endpoints |
 | `concall/pipeline.py` | Background job: audio → speech-to-text → speakers → transcript |
-| `concall/asr.py`, `diarize.py` | Whisper (mlx / faster-whisper) and pyannote wrappers |
+| `concall/cloud.py` | Groq cloud transcription (chunked upload, word timings) |
+| `concall/asr.py`, `diarize.py` | On-Mac Whisper (mlx / faster-whisper) and pyannote wrappers |
+| `concall/isolated.py` | Runs heavy model work in a separate low-priority process |
+| `concall/report.py` | "Report a problem": redacted GitHub issue links |
 | `concall/transcript_parser.py`, `align.py`, `structure.py` | Company-transcript parsing, audio alignment, chapters/speakers/key numbers |
 | `concall/components.py` | Installs the speech engine and speaker separation in the background |
 | `concall/hf.py` | Hugging Face token and model-terms checks |
@@ -81,6 +84,8 @@ Speaker roles are read from the participants list on the first page. Page header
 1. Make the change, run `pytest`, and push a branch. CI ([.github/workflows/mac-app.yml](.github/workflows/mac-app.yml)) runs the tests, builds the `.app` on a real Mac, installs it fresh and transcribes a spoken sample. Each branch push also publishes a **preview** pre-release you can install to try the change.
 2. Bump `__version__` in `concall/__init__.py` and add a `## <version>` section to `CHANGELOG.md`. That section becomes the "what's new" text in the app.
 3. Merge to `main`. CI publishes release `v<version>` with the `.dmg`. Installed apps offer it as a one-click update. Changed dependencies in the `requirements*.txt` files are installed automatically on the next launch.
+
+Optional repository secrets for fuller CI coverage (Settings → Secrets and variables → Actions): `GROQ_API_KEY` tests cloud transcription, and `HF_TOKEN` tests real speaker separation. Without them, those two checks are skipped.
 
 Changes to the launcher (`packaging/macos/launcher.sh`) or `Info.plist` only reach people who download the new `.dmg`. Everything else updates in place.
 

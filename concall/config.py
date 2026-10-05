@@ -75,6 +75,8 @@ DEFAULTS = {
     "diarization": True,  # separate speakers when a token is connected
     "auto_update_check": True,
     "ollama_model": "llama3.2:3b",
+    "groq_key": "",  # cloud transcription (free tier); empty = not connected
+    "mac_mode": "auto",  # auto | gentle | fast: how hard local processing may push the Mac
 }
 
 _lock = threading.Lock()
@@ -116,6 +118,25 @@ def diarization_enabled() -> bool:
     if os.environ.get("DIARIZATION") == "off":
         return False
     return bool(load_settings()["diarization"])
+
+
+def groq_key() -> str:
+    return os.environ.get("GROQ_API_KEY") or load_settings()["groq_key"]
+
+
+def total_ram_gb() -> float:
+    try:
+        return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / 1e9
+    except (ValueError, OSError, AttributeError):
+        return 16.0
+
+
+def gentle_mode() -> bool:
+    """Run local processing at low priority on the efficiency cores. Default on for <=8 GB Macs."""
+    mode = load_settings()["mac_mode"]
+    if mode in ("gentle", "fast"):
+        return mode == "gentle"
+    return total_ram_gb() < 12
 
 
 def ollama_model() -> str:

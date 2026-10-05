@@ -4,6 +4,7 @@ import os
 import platform
 import shutil
 import subprocess
+import threading
 import webbrowser
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -14,8 +15,8 @@ from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import (__version__, asr, components, config, diarize, hf, pipeline, store, summarize,
-               transcript_parser, updater)
+from . import (__version__, asr, cloud, components, config, diarize, hf, media, pipeline, report, store,
+               summarize, transcript_parser, updater)
 
 STATIC = Path(__file__).parent / "static"
 TRANSCRIPT_TYPES = {".pdf", ".txt", ".md", ".text"}
@@ -99,7 +100,34 @@ def status():
 
 @app.get("/api/setup")
 def setup_status():
-    return {"components": components.status(), "hf": hf.status()}
+    key = config.groq_key()
+    return {
+        "components": components.status(),
+        "hf": hf.status(),
+        "groq": {"connected": bool(key), "key_hint": (key[:4] + "…" + key[-4:]) if key else "",
+                 "signup_url": cloud.SIGNUP_PAGE, "keys_url": cloud.KEYS_PAGE},
+        "mac": {"ram_gb": round(config.total_ram_gb()), "gentle": config.gentle_mode(),
+                "mode": config.load_settings()["mac_mode"]},
+    }
+
+
+@app.post("/api/groq/connect")
+def groq_connect(body: dict):
+    key = str(body.get("key") or "").strip()
+    result = cloud.check_key(key)
+    if result["ok"]:
+        config.save_settings({"groq_key": key})
+        # Calls that were waiting because Groq wasn't connected can go now.
+        for meta in store.list_calls():
+            if meta.get("status") == "needs_input" and not meta.get("asr_route"):
+                pipeline.decide(meta["id"], "retry")
+    return result
+
+
+@app.post("/api/groq/disconnect")
+def groq_disconnect():
+    config.save_settings({"groq_key": ""})
+    return {"ok": True}
 
 
 @app.post("/api/setup/{what}")
@@ -135,14 +163,18 @@ def hf_disconnect():
 def get_settings():
     s = config.load_settings()
     s.pop("hf_token", None)
+    s.pop("groq_key", None)
     return s
 
 
 @app.patch("/api/settings")
 def patch_settings(body: dict):
-    allowed = {k: v for k, v in body.items() if k in ("diarization", "auto_update_check", "ollama_model")}
+    allowed = {k: v for k, v in body.items() if k in ("diarization", "auto_update_check", "ollama_model", "mac_mode")}
+    if "mac_mode" in allowed and allowed["mac_mode"] not in ("auto", "gentle", "fast"):
+        raise HTTPException(400, "mac_mode must be auto, gentle or fast")
     s = config.save_settings(allowed)
     s.pop("hf_token", None)
+    s.pop("groq_key", None)
     return s
 
 
@@ -163,7 +195,7 @@ def update_restart():
     return {"ok": True}
 
 
-OPEN_HOSTS = {"huggingface.co", "ollama.com", "github.com", "brew.sh"}
+OPEN_HOSTS = {"huggingface.co", "ollama.com", "github.com", "brew.sh", "groq.com"}
 
 
 def _open(target: str) -> None:
@@ -212,6 +244,14 @@ def export(body: dict):
     return {"ok": True, "path": str(path)}
 
 
+@app.post("/api/report")
+def make_report(body: dict):
+    context = body.get("context") or {}
+    if not isinstance(context, dict):
+        context = {}
+    return report.build(str(body.get("description") or ""), {str(k): str(v)[:2000] for k, v in context.items()})
+
+
 @app.post("/api/clipboard")
 def clipboard(body: dict):
     if not config.IS_MAC:
@@ -242,7 +282,8 @@ def create_call(
         try:
             _store_official(meta["id"], transcript, transcript_text)
         except HTTPException as exc:
-            store.update_meta(meta["id"], warnings=[f"Transcript ignored: {exc.detail}"])
+            store.update_meta(meta["id"], upload_warnings=[f"Transcript ignored: {exc.detail}"],
+                              warnings=[f"Transcript ignored: {exc.detail}"])
     pipeline.enqueue(meta["id"])
     return store.get_meta(meta["id"])
 
@@ -271,6 +312,7 @@ def delete_call(call_id: str):
 @app.post("/api/calls/{call_id}/retry")
 def retry(call_id: str):
     _meta_or_404(call_id)
+    store.update_meta(call_id, decision=None)
     pipeline.enqueue(call_id)
     return store.get_meta(call_id)
 
@@ -285,6 +327,40 @@ def retranscribe(call_id: str):
         (d / name).unlink(missing_ok=True)
     pipeline.enqueue(call_id)
     return store.get_meta(call_id)
+
+
+@app.post("/api/calls/{call_id}/decision")
+def decision(call_id: str, body: dict):
+    _meta_or_404(call_id)
+    try:
+        return pipeline.decide(call_id, str(body.get("choice")))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
+@app.post("/api/calls/{call_id}/enhance")
+def enhance(call_id: str):
+    """Make a cleaned-up copy of the audio for "Clear voice" playback."""
+    meta = _meta_or_404(call_id)
+    if meta.get("enhanced") in ("ready", "running"):
+        return {"state": meta["enhanced"]}
+    store.update_meta(call_id, enhanced="running")
+    d = store.call_dir(call_id)
+    src = d / (meta.get("play_file") or meta["audio_file"])
+
+    def run():
+        part = d / "enhanced.part.m4a"
+        try:
+            media.run("-i", str(src), "-vn", "-ac", "1", "-af", media.CLEAR_VOICE_FILTER,
+                      "-c:a", "aac", "-b:a", "96k", str(part))
+            os.replace(part, d / "enhanced.m4a")
+            store.update_meta(call_id, enhanced="ready")
+        except Exception as exc:
+            part.unlink(missing_ok=True)
+            store.update_meta(call_id, enhanced="error", enhanced_error=str(exc))
+
+    threading.Thread(target=run, daemon=True).start()
+    return {"state": "running"}
 
 
 @app.post("/api/calls/{call_id}/speakers")
@@ -311,9 +387,10 @@ def get_doc(call_id: str):
 
 
 @app.get("/api/calls/{call_id}/audio")
-def get_audio(call_id: str):
+def get_audio(call_id: str, clear: bool = False):
     meta = _meta_or_404(call_id)
-    path = store.call_dir(call_id) / (meta.get("play_file") or meta["audio_file"])
+    d = store.call_dir(call_id)
+    path = d / "enhanced.m4a" if clear and (d / "enhanced.m4a").exists() else d / (meta.get("play_file") or meta["audio_file"])
     return FileResponse(path)
 
 
@@ -350,7 +427,7 @@ def get_user(call_id: str):
 @app.patch("/api/calls/{call_id}/user")
 def patch_user(call_id: str, body: dict):
     _meta_or_404(call_id)
-    allowed = {k: v for k, v in body.items() if k in ("bookmarks", "speakers", "position", "notes", "rate")}
+    allowed = {k: v for k, v in body.items() if k in ("bookmarks", "speakers", "position", "notes", "rate", "clear")}
     return store.update_user(call_id, allowed)
 
 

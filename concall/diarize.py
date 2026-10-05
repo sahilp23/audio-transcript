@@ -6,6 +6,7 @@ works; the transcript just isn't split by speaker until an official transcript
 is attached.
 """
 
+import contextlib
 import wave
 from typing import Optional
 
@@ -60,7 +61,32 @@ def patch_pyannote_hub() -> None:
             mod.hf_hub_download = hub_download_compat(fn)
 
 
-def load_pipeline():
+@contextlib.contextmanager
+def trusted_torch_load():
+    """PyTorch 2.6+ refuses to unpickle pyannote's checkpoints by default
+    ("Weights only load failed"). These files come from the official pyannote
+    repos on Hugging Face, so allow full loading while the pipeline loads."""
+    import torch
+
+    original = torch.load
+
+    def load(*args, **kwargs):
+        kwargs["weights_only"] = False
+        return original(*args, **kwargs)
+
+    torch.load = load
+    try:
+        yield
+    finally:
+        torch.load = original
+
+
+def load_pipeline(device: Optional[str] = None):
+    with trusted_torch_load():
+        return _load_pipeline(device)
+
+
+def _load_pipeline(device: Optional[str]):
     from pyannote.audio import Pipeline
 
     patch_pyannote_hub()
@@ -76,9 +102,11 @@ def load_pipeline():
         )
     import torch
 
-    if torch.backends.mps.is_available():
+    if device is None and torch.backends.mps.is_available():
+        device = "mps"
+    if device and device != "cpu":
         try:
-            pipeline.to(torch.device("mps"))
+            pipeline.to(torch.device(device))
         except Exception:
             pass
     return pipeline
@@ -95,9 +123,15 @@ def _read_wav(path: str):
     return {"waveform": torch.from_numpy(audio).unsqueeze(0), "sample_rate": rate}
 
 
-def diarize(wav_path: str) -> list[dict]:
-    """Returns [{"s": start, "e": end, "spk": "SPEAKER_00"}, ...] sorted by start."""
-    pipeline = load_pipeline()
+def diarize(wav_path: str, gentle: bool = False) -> list[dict]:
+    """Returns [{"s": start, "e": end, "spk": "SPEAKER_00"}, ...] sorted by start.
+
+    gentle: CPU only with a few threads, so the Mac stays usable."""
+    if gentle:
+        import torch
+
+        torch.set_num_threads(4)
+    pipeline = load_pipeline("cpu" if gentle else None)
     output = pipeline(_read_wav(wav_path))
     annotation = getattr(output, "speaker_diarization", output)  # 4.x wraps the result
     segs = [
