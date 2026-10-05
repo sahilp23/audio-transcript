@@ -1,0 +1,3 @@
+# Optional: speaker separation for calls without a company transcript.
+# Needs a free Hugging Face token, see README.
+pyannote.audio>=3.3,<4.0
