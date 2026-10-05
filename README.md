@@ -15,54 +15,24 @@ It's built for the companies Quartr doesn't cover. The company's official transc
 - **Bookmarks with notes.** Press `B` to bookmark the current moment. Bookmarks appear as yellow marks on the timeline.
 - **Notes.** Free-form notes per call.
 - **Speakers panel.** Shows talk-time share for each speaker. You can rename auto-detected speakers (e.g. "Speaker 2" → "CFO") and jump to someone's next answer.
-- **Optional AI summary** using a local model through [Ollama](https://ollama.com). It's free and runs offline.
+- **Optional AI summary** using a local model through [Ollama](https://ollama.com). It's free and runs offline. Setup steps are in the app under Settings.
 - **Player.** Playback speed from 0.75× to 2×, ±15 s skips, keyboard shortcuts (press `?`), media keys, and it remembers where you stopped.
 - Copy the transcript, or download it as Markdown with timestamps and chapters.
 - Works in light and dark mode.
 
-## Setup (MacBook, Apple Silicon)
+## Install
 
-You only need to do this once.
+**Mac app (recommended):** see **[INSTALL.md](INSTALL.md)**. You download a `.dmg`, drag the app to Applications and open it. No Terminal needed. The app installs its speech engine on its own, has a guided Hugging Face setup in Settings, and updates itself.
+
+**From source (developers):**
 
 ```bash
-# 1. Tools (if you don't have Homebrew: https://brew.sh)
 brew install ffmpeg python@3.12
-
-# 2. Get the code
-git clone https://github.com/sahilp23/audio-transcript.git
-cd audio-transcript
-
-# 3. Start (the first run installs dependencies into .venv)
-./run.sh
+git clone https://github.com/sahilp23/audio-transcript.git && cd audio-transcript
+./run.sh              # creates .venv, installs everything, opens http://127.0.0.1:8765
 ```
 
-The app opens at <http://127.0.0.1:8765>. Leave the Terminal window open while you use it, and press `Ctrl+C` to stop.
-
-The first time you transcribe a call, the speech model (Whisper large-v3-turbo, about 1.6 GB) is downloaded from Hugging Face. After that, everything works offline.
-
-**Want to try the player before transcribing anything?** Run `.venv/bin/python scripts/demo.py`. It adds a short demo call with a placeholder tone instead of real speech, so you can try the interface.
-
-### Optional: speaker separation for calls without a transcript
-
-Without this, an auto transcript is one continuous text. Chapters, Q&A detection and key numbers still work, and attaching the official transcript adds speakers anyway. To have the app tell speakers apart on its own:
-
-1. Create a free account at <https://huggingface.co>.
-2. Open these two pages and accept the terms on each:
-   - <https://huggingface.co/pyannote/speaker-diarization-3.1>
-   - <https://huggingface.co/pyannote/segmentation-3.0>
-3. Create a **Read** token at <https://huggingface.co/settings/tokens>.
-4. Copy the example settings file: `cp .env.example .env`. Then edit `.env` and set `HF_TOKEN=hf_...`.
-5. Run `./run.sh` again. It installs `pyannote.audio` automatically.
-
-The top-right corner of the app shows `speakers on` once this is working. For calls you already transcribed, use **More… → Re-run speech-to-text** to separate speakers.
-
-### Optional: AI summaries
-
-1. Install [Ollama](https://ollama.com).
-2. In Terminal, run `ollama pull llama3.2:3b`.
-3. Keep Ollama running, then open a call → **Summary** → **Generate summary**.
-
-To use a different model, set `OLLAMA_MODEL` in `.env`. A larger model gives better summaries if your Mac has enough memory.
+`.venv/bin/python scripts/demo.py` adds a demo call so you can try the player without transcribing anything.
 
 ## How it works
 
@@ -74,7 +44,7 @@ company transcript (PDF/text) ──parser──▶ speaker turns ──aligner�
 
 - **Speech-to-text:** [mlx-whisper](https://github.com/ml-explore/mlx-examples/tree/main/whisper) on Apple Silicon. On other machines it uses [faster-whisper](https://github.com/SYSTRAN/faster-whisper) on the CPU. The model gets a short vocabulary hint (company name, EBITDA, crores, FY27…) so finance terms are spelled correctly.
 - **Lining up the official transcript with the audio:** company transcripts are edited, with fillers removed and grammar fixed, so they never match the audio word for word. The aligner matches the official words to the speech-to-text words. Matched words take the exact audio timing. Words that don't match get timings spread evenly between their matched neighbours. The sidebar shows the result as "N% synced". Aligning a one-hour call takes about 0.1 s, so attaching a transcript is quick.
-- **Storage:** each call is a folder in `./data/calls/`, holding the audio and JSON files. To use a different location, set `CONCALL_DATA_DIR`. Bookmarks, notes and speaker names are kept in `user.json` in the call's folder. Re-processing a call doesn't touch them.
+- **Storage:** each call is a folder in `calls/`, inside `~/Library/Application Support/Concall Player` for the app or `./data` when running from source. It holds the audio and JSON files. Bookmarks, notes and speaker names are kept in `user.json` in the call's folder. Re-processing a call doesn't touch them.
 
 ## Transcript formats
 
@@ -88,23 +58,42 @@ A B:         Thank you…
 
 Speaker roles are read from the participants list on the first page. Page headers, footers and page numbers are removed. If a transcript can't be parsed, the app tells you, and the call keeps its auto transcript.
 
-## Settings (`.env`)
+## Project layout
+
+| Path | What it is |
+|---|---|
+| `concall/server.py` | Local web server (FastAPI): all `/api/...` endpoints |
+| `concall/pipeline.py` | Background job: audio → speech-to-text → speakers → transcript |
+| `concall/asr.py`, `diarize.py` | Whisper (mlx / faster-whisper) and pyannote wrappers |
+| `concall/transcript_parser.py`, `align.py`, `structure.py` | Company-transcript parsing, audio alignment, chapters/speakers/key numbers |
+| `concall/components.py` | Installs the speech engine and speaker separation in the background |
+| `concall/hf.py` | Hugging Face token and model-terms checks |
+| `concall/updater.py` | In-app updates from GitHub Releases |
+| `concall/desktop.py` | Mac app entry point (native window via pywebview) |
+| `concall/static/` | The interface (plain HTML/CSS/JS, no build step) |
+| `packaging/macos/` | `.app` launcher, build script, icon, CI smoke test |
+| `requirements.txt` | Core packages (the app's launcher installs these) |
+| `requirements-engine.txt` | Speech engine (installed by the app on first launch) |
+| `requirements-diarization.txt` | Speaker separation (installed when Hugging Face is connected) |
+
+## Shipping a new version
+
+1. Make the change, run `pytest`, and push a branch. CI ([.github/workflows/mac-app.yml](.github/workflows/mac-app.yml)) runs the tests, builds the `.app` on a real Mac, installs it fresh and transcribes a spoken sample. Each branch push also publishes a **preview** pre-release you can install to try the change.
+2. Bump `__version__` in `concall/__init__.py` and add a `## <version>` section to `CHANGELOG.md`. That section becomes the "what's new" text in the app.
+3. Merge to `main`. CI publishes release `v<version>` with the `.dmg`. Installed apps offer it as a one-click update. Changed dependencies in the `requirements*.txt` files are installed automatically on the next launch.
+
+Changes to the launcher (`packaging/macos/launcher.sh`) or `Info.plist` only reach people who download the new `.dmg`. Everything else updates in place.
+
+## Settings for developers (environment variables or `.env`)
 
 | Variable | Default | |
 |---|---|---|
-| `HF_TOKEN` | – | Turns on speaker separation |
-| `MLX_MODEL` | `mlx-community/whisper-large-v3-turbo` | Speech model on Mac |
+| `HF_TOKEN` | – | Hugging Face token (the app stores it in Settings instead) |
+| `MLX_MODEL` | `mlx-community/whisper-large-v3-turbo` | Speech model on Apple Silicon |
 | `ASR_ENGINE` | `auto` | `mlx`, `faster`, or `auto` |
-| `CONCALL_DATA_DIR` | `./data` | Where calls are stored |
+| `CONCALL_SUPPORT_DIR` | `./data` (app: `~/Library/Application Support/Concall Player`) | Where calls and settings are stored |
 | `OLLAMA_MODEL` | `llama3.2:3b` | Model for summaries |
 | `PORT` | `8765` | |
-
-## Development
-
-```bash
-.venv/bin/pip install -r requirements-dev.txt
-.venv/bin/python -m pytest -q
-```
 
 ## Roadmap
 

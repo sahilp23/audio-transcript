@@ -45,15 +45,15 @@ def ollama_status() -> dict:
     try:
         with urllib.request.urlopen(config.OLLAMA_URL + "/api/tags", timeout=2) as r:
             models = [m["name"] for m in json.loads(r.read()).get("models", [])]
-        return {"running": True, "models": models, "model": config.OLLAMA_MODEL,
-                "model_available": any(m == config.OLLAMA_MODEL or m.split(":")[0] == config.OLLAMA_MODEL for m in models)}
+        return {"running": True, "models": models, "model": config.ollama_model(),
+                "model_available": any(m == config.ollama_model() or m.split(":")[0] == config.ollama_model() for m in models)}
     except Exception:
-        return {"running": False, "models": [], "model": config.OLLAMA_MODEL, "model_available": False}
+        return {"running": False, "models": [], "model": config.ollama_model(), "model_available": False}
 
 
 def _generate(prompt: str) -> str:
     body = json.dumps({
-        "model": config.OLLAMA_MODEL,
+        "model": config.ollama_model(),
         "prompt": prompt,
         "stream": False,
         "options": {"num_ctx": 8192, "temperature": 0.2},
@@ -84,7 +84,7 @@ def start(call_id: str) -> dict:
     current = store.read_json(path, {})
     if current.get("status") == "running":
         return current
-    state = {"status": "running", "progress": 0.0, "model": config.OLLAMA_MODEL, "started_at": time.time()}
+    state = {"status": "running", "progress": 0.0, "model": config.ollama_model(), "started_at": time.time()}
     store.write_json(path, state)
 
     def run():
@@ -97,7 +97,7 @@ def start(call_id: str) -> dict:
                 notes.append(_generate(CHUNK_PROMPT.format(company=meta["company"], period=meta["period"], text=chunk)))
                 store.write_json(path, {**state, "progress": (i + 1) / (len(chunks) + 1)})
             final = _generate(FINAL_PROMPT.format(company=meta["company"], period=meta["period"], text="\n\n".join(notes)))
-            store.write_json(path, {"status": "done", "text": final, "model": config.OLLAMA_MODEL, "created_at": time.time()})
+            store.write_json(path, {"status": "done", "text": final, "model": config.ollama_model(), "created_at": time.time()})
         except urllib.error.URLError:
             store.write_json(path, {"status": "error", "error": f"Could not reach Ollama at {config.OLLAMA_URL}. Is it running?"})
         except Exception as exc:

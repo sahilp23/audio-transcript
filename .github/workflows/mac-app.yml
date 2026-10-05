@@ -1,0 +1,67 @@
+name: Mac app
+
+# Every push: run the tests, build "Concall Player.app" on a real Mac, install it
+# fresh and transcribe a spoken sample. Then publish it:
+#   main          -> release vX.Y.Z (once per version; the app's updater sees it)
+#   other branches -> the "preview" pre-release (for trying changes before merging)
+on:
+  push:
+    paths-ignore: ["**.md"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: mac-app-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-14
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Unit tests
+        run: |
+          python -m pip install -q -r requirements.txt pytest httpx reportlab
+          python -m pytest -q tests
+
+      - name: Build app
+        run: |
+          python -m pip install -q pillow
+          packaging/macos/build_app.sh dist
+
+      - name: Test the built app (fresh install + real transcription)
+        run: packaging/macos/smoke_test.sh "dist/Concall Player.app"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Concall-Player-mac
+          path: dist/Concall-Player.dmg
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="$(sed -n 's/^__version__ = "\(.*\)"/\1/p' concall/__init__.py)"
+          if [ "$GITHUB_REF_NAME" = "main" ]; then
+            if gh release view "v$VERSION" >/dev/null 2>&1; then
+              echo "v$VERSION already released; bump concall/__init__.py to publish a new version."
+              exit 0
+            fi
+            # Release notes = this version's section of CHANGELOG.md
+            awk -v v="$VERSION" '/^## /{p = ($2 == v)} p && !/^## /' CHANGELOG.md > notes.md
+            gh release create "v$VERSION" dist/Concall-Player.dmg --target "$GITHUB_SHA" \
+              --title "Concall Player $VERSION" --notes-file notes.md --latest
+          else
+            gh release delete preview --yes --cleanup-tag >/dev/null 2>&1 || true
+            gh release create preview dist/Concall-Player.dmg --target "$GITHUB_SHA" --prerelease \
+              --title "Preview: $GITHUB_REF_NAME ($VERSION)" \
+              --notes "Test build from branch \`$GITHUB_REF_NAME\` (commit ${GITHUB_SHA::7}). Not offered as an in-app update."
+          fi

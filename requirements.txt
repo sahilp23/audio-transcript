@@ -1,7 +1,8 @@
+# Core app (installed by the Mac app's launcher on first start; small and quick).
 fastapi>=0.115
 uvicorn>=0.30
 python-multipart>=0.0.9
 pypdf>=4.0
-# Speech-to-text: Apple GPU on M-series Macs, CPU elsewhere
-mlx-whisper>=0.4.3 ; sys_platform == "darwin" and platform_machine == "arm64"
-faster-whisper>=1.1 ; sys_platform != "darwin" or platform_machine != "arm64"
+huggingface_hub>=0.24
+imageio-ffmpeg>=0.5.1
+pywebview>=5.0 ; sys_platform == "darwin"

@@ -1,0 +1,6 @@
+# Speech-to-text. The app installs this in the background on first launch.
+mlx-whisper>=0.4.3 ; sys_platform == "darwin" and platform_machine == "arm64"
+# CPU engine: the main engine off Apple Silicon, and a fallback if the Mac GPU path fails.
+faster-whisper>=1.1
+# pyannote.audio 3.x (speaker separation) doesn't work with torch/torchaudio 2.9+.
+torch<2.9

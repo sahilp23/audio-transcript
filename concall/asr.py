@@ -25,14 +25,7 @@ _mlx_lock = threading.Lock()
 def pick_engine() -> str:
     if config.ASR_ENGINE != "auto":
         return config.ASR_ENGINE
-    if config.IS_APPLE_SILICON:
-        try:
-            import mlx_whisper  # noqa: F401
-
-            return "mlx"
-        except ImportError:
-            pass
-    return "faster"
+    return "mlx" if config.IS_APPLE_SILICON else "faster"
 
 
 def build_prompt(company: str = "", names: Optional[list[str]] = None) -> str:
@@ -47,8 +40,19 @@ def build_prompt(company: str = "", names: Optional[list[str]] = None) -> str:
 def transcribe(wav_path: str, duration: float, prompt: str, progress: ProgressFn) -> dict:
     engine = pick_engine()
     if engine == "mlx":
-        words = _transcribe_mlx(wav_path, duration, prompt, progress)
-        model = config.MLX_MODEL
+        try:
+            words = _transcribe_mlx(wav_path, duration, prompt, progress)
+            model = config.MLX_MODEL
+        except Exception as exc:
+            # e.g. the Mac GPU (Metal) isn't usable: fall back to the CPU engine if present.
+            try:
+                import faster_whisper  # noqa: F401
+            except ImportError:
+                raise exc
+            print(f"mlx-whisper failed ({exc}); falling back to faster-whisper on CPU", flush=True)
+            engine = "faster"
+            words = _transcribe_faster(wav_path, duration, prompt, progress)
+            model = config.FASTER_WHISPER_MODEL
     elif engine == "faster":
         words = _transcribe_faster(wav_path, duration, prompt, progress)
         model = config.FASTER_WHISPER_MODEL

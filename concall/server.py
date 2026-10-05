@@ -1,15 +1,21 @@
 """Local web server: `python -m concall` then open http://127.0.0.1:8765"""
 
+import os
+import platform
 import shutil
+import subprocess
+import webbrowser
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlparse
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import asr, config, diarize, pipeline, store, summarize, transcript_parser
+from . import (__version__, asr, components, config, diarize, hf, pipeline, store, summarize,
+               transcript_parser, updater)
 
 STATIC = Path(__file__).parent / "static"
 TRANSCRIPT_TYPES = {".pdf", ".txt", ".md", ".text"}
@@ -22,6 +28,21 @@ async def lifespan(_app):
 
 
 app = FastAPI(title="Concall Player", lifespan=lifespan)
+
+ALLOWED_HOSTS = {"127.0.0.1", "localhost"}
+
+
+@app.middleware("http")
+async def local_only(request: Request, call_next):
+    # Only this app's own page may call the API: block other websites open in a
+    # browser (custom header => cross-site requests are refused) and DNS rebinding.
+    host = (request.headers.get("host") or "").rsplit(":", 1)[0]
+    if host not in ALLOWED_HOSTS and host != "testserver":
+        return JSONResponse({"detail": "Forbidden host"}, status_code=403)
+    if request.method not in ("GET", "HEAD", "OPTIONS") and request.url.path.startswith("/api/"):
+        if request.headers.get("x-concall") != "1":
+            return JSONResponse({"detail": "Missing app header"}, status_code=403)
+    return await call_next(request)
 
 
 def _meta_or_404(call_id: str) -> dict:
@@ -56,15 +77,147 @@ def _store_official(call_id: str, transcript: Optional[UploadFile], transcript_t
     return parsed
 
 
+@app.get("/api/ping")
+def ping():
+    return {"ok": True}
+
+
 @app.get("/api/status")
 def status():
+    engine = asr.pick_engine()
     return {
-        "asr_engine": asr.pick_engine(),
-        "asr_model": config.MLX_MODEL if asr.pick_engine() == "mlx" else config.FASTER_WHISPER_MODEL,
+        "version": __version__,
+        "app_mode": config.APP_MODE,
+        "platform": platform.system().lower(),
+        "asr_engine": engine,
+        "asr_model": config.MLX_MODEL if engine == "mlx" else config.FASTER_WHISPER_MODEL,
         "diarization": diarize.available() or "ready",
         "ollama": summarize.ollama_status(),
         "data_dir": str(config.DATA_DIR),
     }
+
+
+@app.get("/api/setup")
+def setup_status():
+    return {"components": components.status(), "hf": hf.status()}
+
+
+@app.post("/api/setup/{what}")
+def setup_start(what: str):
+    if what in ("engine", "speakers"):
+        components.install(what)
+    elif what == "speech_model":
+        components.download_speech_model()
+    elif what == "speaker_model":
+        hf.start_setup()
+    else:
+        raise HTTPException(404, "Unknown component")
+    return components.status()
+
+
+@app.post("/api/hf/connect")
+def hf_connect(body: dict):
+    return hf.connect(str(body.get("token") or ""))
+
+
+@app.post("/api/hf/check")
+def hf_check():
+    return hf.recheck()
+
+
+@app.post("/api/hf/disconnect")
+def hf_disconnect():
+    hf.disconnect()
+    return hf.status()
+
+
+@app.get("/api/settings")
+def get_settings():
+    s = config.load_settings()
+    s.pop("hf_token", None)
+    return s
+
+
+@app.patch("/api/settings")
+def patch_settings(body: dict):
+    allowed = {k: v for k, v in body.items() if k in ("diarization", "auto_update_check", "ollama_model")}
+    s = config.save_settings(allowed)
+    s.pop("hf_token", None)
+    return s
+
+
+@app.get("/api/update")
+def update_check(force: bool = False):
+    return {**updater.check(force=force), "install": updater.install_status()}
+
+
+@app.post("/api/update/install")
+def update_install():
+    return updater.install()
+
+
+@app.post("/api/update/restart")
+def update_restart():
+    if not updater.restart():
+        raise HTTPException(400, "Restart isn't available when running from source")
+    return {"ok": True}
+
+
+OPEN_HOSTS = {"huggingface.co", "ollama.com", "github.com", "brew.sh"}
+
+
+def _open(target: str) -> None:
+    if config.IS_MAC:
+        subprocess.Popen(["/usr/bin/open", target])
+    else:
+        webbrowser.open(target)
+
+
+@app.post("/api/open")
+def open_url(body: dict):
+    url = str(body.get("url") or "")
+    host = urlparse(url).hostname or ""
+    if urlparse(url).scheme != "https" or not any(host == h or host.endswith("." + h) for h in OPEN_HOSTS):
+        raise HTTPException(400, "Not an allowed link")
+    _open(url)
+    return {"ok": True}
+
+
+@app.post("/api/reveal")
+def reveal(body: dict):
+    what = body.get("what")
+    target = {"data": config.DATA_DIR, "logs": Path.home() / "Library" / "Logs" / "Concall Player"}.get(what)
+    if target is None:
+        raise HTTPException(400, "Unknown folder")
+    target.mkdir(parents=True, exist_ok=True)
+    _open(str(target))
+    return {"ok": True, "path": str(target)}
+
+
+@app.post("/api/export")
+def export(body: dict):
+    """Save text to ~/Downloads (the app window can't do browser downloads)."""
+    name = Path(str(body.get("filename") or "transcript.md")).name.replace("/", "-") or "transcript.md"
+    downloads = Path.home() / "Downloads"
+    downloads.mkdir(exist_ok=True)
+    stem, suffix = os.path.splitext(name)
+    path = downloads / name
+    n = 1
+    while path.exists():
+        n += 1
+        path = downloads / f"{stem} ({n}){suffix}"
+    path.write_text(str(body.get("text") or ""))
+    if config.IS_MAC:
+        subprocess.Popen(["/usr/bin/open", "-R", str(path)])
+    return {"ok": True, "path": str(path)}
+
+
+@app.post("/api/clipboard")
+def clipboard(body: dict):
+    if not config.IS_MAC:
+        raise HTTPException(400, "Clipboard helper is Mac-only")
+    subprocess.run(["/usr/bin/pbcopy"], input=str(body.get("text") or ""), text=True, check=True)
+    return {"ok": True}
 
 
 @app.get("/api/calls")
@@ -134,6 +287,20 @@ def retranscribe(call_id: str):
     return store.get_meta(call_id)
 
 
+@app.post("/api/calls/{call_id}/speakers")
+def detect_speakers(call_id: str):
+    """Re-run speaker separation only (e.g. after connecting Hugging Face)."""
+    meta = _meta_or_404(call_id)
+    if meta.get("status") in ("queued", "processing"):
+        raise HTTPException(409, "Already processing")
+    reason = diarize.available()
+    if reason:
+        raise HTTPException(400, f"Speaker separation is off: {reason}")
+    (store.call_dir(call_id) / "diar.json").unlink(missing_ok=True)
+    pipeline.enqueue(call_id)
+    return store.get_meta(call_id)
+
+
 @app.get("/api/calls/{call_id}/doc")
 def get_doc(call_id: str):
     _meta_or_404(call_id)
@@ -167,7 +334,7 @@ def remove_transcript(call_id: str):
     _meta_or_404(call_id)
     d = store.call_dir(call_id)
     (d / "official.json").unlink(missing_ok=True)
-    if not (d / "diar.json").exists() and diarize.available() is None:
+    if not (d / "diar.json").exists() and diarize.wanted():
         pipeline.enqueue(call_id)  # speakers weren't separated yet; do it now
     else:
         pipeline.rebuild_async(call_id)
@@ -203,7 +370,11 @@ def make_summary(call_id: str):
 
 @app.get("/")
 def index():
-    return FileResponse(STATIC / "index.html")
+    # Version the asset URLs so an app update never shows stale cached files.
+    html = (STATIC / "index.html").read_text()
+    for asset in ("/static/app.js", "/static/settings.js", "/static/styles.css"):
+        html = html.replace(asset, f"{asset}?v={__version__}")
+    return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 
 
 app.mount("/static", StaticFiles(directory=STATIC), name="static")

@@ -1,12 +1,8 @@
 #!/usr/bin/env bash
-# One-command start: creates the virtualenv on first run, then launches the app.
+# Developer start (from source): creates .venv on first run, then opens the app in
+# your browser. Non-technical users should use the Mac app instead (INSTALL.md).
 set -euo pipefail
 cd "$(dirname "$0")"
-
-if ! command -v ffmpeg >/dev/null; then
-  echo "ffmpeg is missing. Install it with:  brew install ffmpeg"
-  exit 1
-fi
 
 PY=${PYTHON:-}
 if [ -z "$PY" ]; then
@@ -23,7 +19,7 @@ if [ ! -d .venv ]; then
   echo "First run: setting up (takes a minute)…"
   "$PY" -m venv .venv
   .venv/bin/pip install --upgrade pip >/dev/null
-  .venv/bin/pip install -r requirements.txt
+  .venv/bin/pip install -r requirements.txt -r requirements-engine.txt
 fi
 if [ -n "${HF_TOKEN:-}" ] || grep -qs '^HF_TOKEN=' .env; then
   .venv/bin/python -c 'import pyannote.audio' 2>/dev/null || .venv/bin/pip install -r requirements-diarization.txt

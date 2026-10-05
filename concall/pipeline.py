@@ -5,15 +5,12 @@ Intermediate results are cached, so attaching an official transcript later only
 re-runs the cheap alignment step.
 """
 
-import json
 import queue
-import shutil
-import subprocess
 import threading
 import traceback
 from pathlib import Path
 
-from . import asr, diarize, store, structure
+from . import asr, components, config, diarize, media, store, structure
 
 BROWSER_AUDIO = {".mp3", ".m4a", ".aac", ".mp4", ".wav", ".ogg", ".oga", ".webm", ".flac", ".opus"}
 
@@ -21,20 +18,6 @@ _jobs: "queue.Queue[str]" = queue.Queue()
 _queued: set[str] = set()
 _qlock = threading.Lock()
 _build_locks: dict[str, threading.Lock] = {}
-
-
-def ffprobe_duration(path: Path) -> float:
-    out = subprocess.run(
-        ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "json", str(path)],
-        capture_output=True, text=True, check=True,
-    ).stdout
-    return float(json.loads(out)["format"]["duration"])
-
-
-def _ffmpeg(*args: str) -> None:
-    proc = subprocess.run(["ffmpeg", "-y", "-loglevel", "error", *args], capture_output=True, text=True)
-    if proc.returncode != 0:
-        raise RuntimeError("ffmpeg failed: " + proc.stderr.strip()[-500:])
 
 
 def enqueue(call_id: str) -> None:
@@ -47,8 +30,10 @@ def enqueue(call_id: str) -> None:
 
 
 def start_worker() -> None:
-    if shutil.which("ffmpeg") is None:
-        print("WARNING: ffmpeg not found. Install it with: brew install ffmpeg")
+    try:
+        media.ensure_ffmpeg()
+    except RuntimeError as exc:
+        print(f"WARNING: {exc}")
     threading.Thread(target=_worker, daemon=True, name="concall-worker").start()
     # Resume anything interrupted by a restart.
     for meta in store.list_calls():
@@ -78,11 +63,11 @@ def process(call_id: str) -> None:
     audio = d / meta["audio_file"]
     warnings: list[str] = []
 
-    duration = ffprobe_duration(audio)
+    duration = media.duration(audio)
     play_file = meta["audio_file"]
     if audio.suffix.lower() not in BROWSER_AUDIO:
         play_file = "play.m4a"
-        _ffmpeg("-i", str(audio), "-vn", "-ac", "1", "-c:a", "aac", "-b:a", "96k", str(d / play_file))
+        media.run("-i", str(audio), "-vn", "-ac", "1", "-c:a", "aac", "-b:a", "96k", str(d / play_file))
     store.update_meta(call_id, duration=duration, play_file=play_file)
 
     wav = d / "audio16k.wav"
@@ -91,10 +76,14 @@ def process(call_id: str) -> None:
     official = store.read_json(d / "official.json")
 
     try:
-        if not asr_path.exists() or (not diar_path.exists() and not official and diarize.available() is None):
-            _ffmpeg("-i", str(audio), "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", str(wav))
+        if not asr_path.exists() or (not diar_path.exists() and not official and diarize.wanted()):
+            media.run("-i", str(audio), "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", str(wav))
 
         if not asr_path.exists():
+            def on_setup(msg: str, p) -> None:
+                store.update_meta(call_id, stage=msg, progress=round(0.02 + 0.03 * (p or 0), 3))
+
+            components.ensure_speech_ready(on_setup)
             engine = asr.pick_engine()
             store.update_meta(call_id, stage=f"Transcribing ({engine})", progress=0.05)
             names = [t["speaker"] for t in official["turns"]] if official else None
@@ -119,6 +108,8 @@ def process(call_id: str) -> None:
             if reason is None:
                 store.update_meta(call_id, stage="Separating speakers", progress=0.82)
                 try:
+                    components.ensure_speakers_ready(lambda msg, p: store.update_meta(call_id, stage=msg))
+                    store.update_meta(call_id, stage="Separating speakers", progress=0.82)
                     store.write_json(diar_path, diarize.diarize(str(wav)))
                 except Exception as exc:
                     traceback.print_exc()

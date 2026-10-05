@@ -39,7 +39,7 @@ function toast(msg, ms = 2600) {
 
 const api = {
   async req(method, url, body) {
-    const opts = { method, headers: {} };
+    const opts = { method, headers: { "X-Concall": "1" } };
     if (body instanceof FormData) opts.body = body;
     else if (body !== undefined) { opts.body = JSON.stringify(body); opts.headers["Content-Type"] = "application/json"; }
     const r = await fetch(url, opts);
@@ -79,6 +79,7 @@ async function route() {
   const m = location.hash.match(/^#\/call\/([\w-]+)/);
   if (m) return Player.open(m[1]);
   Player.close();
+  if (location.hash.startsWith("#/settings")) return Settings.render();
   return renderLibrary();
 }
 window.addEventListener("hashchange", route);
@@ -238,6 +239,7 @@ const Upload = {
     btn.disabled = true;
     const xhr = new XMLHttpRequest();
     xhr.open("POST", "/api/calls");
+    xhr.setRequestHeader("X-Concall", "1");
     xhr.upload.onprogress = (ev) => { if (ev.lengthComputable) bar.style.width = `${(ev.loaded / ev.total) * 100}%`; };
     xhr.onload = () => {
       btn.disabled = false;
@@ -513,7 +515,7 @@ const Player = {
       if (c) this.seek(c.t, true);
       e.target.value = "";
     };
-    $("#copy-btn").onclick = () => navigator.clipboard.writeText(this.exportText(false)).then(() => toast("Transcript copied"), () => toast("Copy failed"));
+    $("#copy-btn").onclick = () => copyText(this.exportText(false)).then(() => toast("Transcript copied"), () => toast("Copy failed"));
     $("#download-btn").onclick = () => this.download();
     $("#help-btn").onclick = () => $("#help-dialog").showModal();
     $("#follow-btn").onclick = () => { this.follow = true; $("#follow-btn").classList.add("hidden"); this.scrollToCurrent(true); };
@@ -671,7 +673,7 @@ const Player = {
     const hl = this.doc.highlights || [];
     const kind = this.hlKind || "all";
     const items = hl.filter((h) => kind === "all" || h.kind === kind);
-    const numRe = /((?:₹|rs\.?|inr|\$|usd)\s?)?(?<![A-Za-z\d.])\d[\d,]*(?:\.\d+)?\s?(?:%|percent|per cent|crores?|cr\b|lakhs?|bps|basis points|million|billion|mn\b|bn\b|x\b|times)?/gi;
+        const numRe = /(^|[^A-Za-z0-9.#&])((?:₹|rs\.?|inr|\$|usd)\s?)?(\d[\d,]*(?:\.\d+)?\s?(?:%|percent|per cent|crores?|cr\b|lakhs?|bps|basis points|million|billion|mn\b|bn\b|x\b|times)?)/gi;
     el.innerHTML = `
       <div class="filter-row">
         ${[["all", "All"], ["guidance", "Guidance & outlook"], ["number", "Reported numbers"]].map(([k, l]) => `<button class="chip ${kind === k ? "on" : ""}" data-k="${k}">${l}</button>`).join("")}
@@ -680,7 +682,7 @@ const Player = {
         const sp = this.speakerOf(this.doc.turns[h.turn]);
         return `<div class="list-item" data-t="${h.t}">
           <span class="time">${fmtTime(h.t)}</span>
-          <div class="body"><div class="hl-text">${esc(h.text).replace(numRe, (m) => (/\d/.test(m) ? `<b>${m}</b>` : m))}</div>
+          <div class="body"><div class="hl-text">${esc(h.text).replace(numRe, (m, pre, cur, num) => `${pre}<b>${cur || ""}${num}</b>`)}</div>
           ${this.doc.speakers_separated ? `<div class="sub">${esc(sp.name)}</div>` : ""}</div>
         </div>`;
       }).join("") : `<p class="muted small">Nothing found.</p>`}`;
@@ -757,7 +759,9 @@ const Player = {
     rows.sort((a, b) => (talk[b.k] || 0) - (talk[a.k] || 0));
     const note = this.doc.speakers_separated
       ? (this.meta.has_official ? "" : `<p class="muted small" style="padding:0 6px">Speakers were detected automatically. Click ✎ to name them (e.g. CEO, CFO) — names apply across the whole call.</p>`)
-      : `<div class="hint">Speakers aren't separated for this call. Attach the company transcript, or enable speaker separation (see README: <code>HF_TOKEN</code>) and re-run speech-to-text.</div>`;
+      : (state.status?.diarization === "ready"
+        ? `<div class="hint">Speakers aren't separated for this call yet. <button class="btn small primary" id="detect-speakers">Detect speakers</button><br><span class="small">Takes a few minutes. Or attach the company transcript.</span></div>`
+        : `<div class="hint">Speakers aren't separated for this call. Attach the company transcript, or <a href="#/settings">connect Hugging Face in Settings</a> to let the app tell speakers apart.</div>`);
     el.innerHTML = note + rows.map(({ k, turn, sp }) => `
       <div class="speaker-row" data-k="${esc(k)}">
         <span class="avatar" style="background:${sp.color}">${esc(initials(sp.name))}</span>
@@ -774,6 +778,10 @@ const Player = {
         <input placeholder="Role (e.g. CFO)" value="${esc(this.user.speakers[k]?.role ?? (this.doc.speakers[k]?.role || ""))}" data-field="role">
         <div style="display:flex;gap:6px"><button class="btn small primary" data-save="${esc(k)}">Save</button><button class="btn small ghost" data-cancel="${esc(k)}">Cancel</button></div>
       </div>`).join("");
+    $("#detect-speakers", el)?.addEventListener("click", async () => {
+      try { await api.post(`/api/calls/${this.id}/speakers`); toast("Detecting speakers…"); const id = this.id; this.close(); this.open(id); }
+      catch (e) { toast(e.message); }
+    });
     $$("[data-edit]", el).forEach((b) => (b.onclick = () => $(`[data-form="${CSS.escape(b.dataset.edit)}"]`, el).classList.toggle("hidden")));
     $$("[data-cancel]", el).forEach((b) => (b.onclick = () => $(`[data-form="${CSS.escape(b.dataset.cancel)}"]`, el).classList.add("hidden")));
     $$("[data-save]", el).forEach((b) => (b.onclick = () => {
@@ -860,12 +868,7 @@ const Player = {
   },
 
   download() {
-    const blob = new Blob([this.exportText(true)], { type: "text/markdown" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = `${this.meta.company} ${this.meta.period}.md`.replace(/[\/:]/g, "-");
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+    saveFile(`${this.meta.company} ${this.meta.period}.md`.replace(/[\/:]/g, "-"), this.exportText(true));
   },
 
   /* ---------- find ---------- */
@@ -1168,6 +1171,43 @@ document.addEventListener("keydown", (e) => {
 });
 
 /* ------------------------------------------------------------------ */
+/* App-window helpers (the Mac app window can't do browser downloads)  */
+/* ------------------------------------------------------------------ */
+
+const inApp = () => !!state.status?.app_mode;
+
+async function copyText(text) {
+  try { await navigator.clipboard.writeText(text); }
+  catch { await api.post("/api/clipboard", { text }); }
+}
+
+async function saveFile(filename, text) {
+  if (state.status?.platform === "darwin") {
+    const r = await api.post("/api/export", { filename, text });
+    toast(`Saved to Downloads: ${r.path.split("/").pop()}`, 4000);
+    return;
+  }
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([text], { type: "text/markdown" }));
+  a.download = filename;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+}
+
+function openExternal(url) {
+  if (inApp()) api.post("/api/open", { url }).catch((e) => toast(e.message));
+  else window.open(url, "_blank", "noopener");
+}
+
+// External links open in your normal browser.
+document.addEventListener("click", (e) => {
+  const a = e.target.closest("a[href^='https://']");
+  if (!a) return;
+  e.preventDefault();
+  openExternal(a.href);
+});
+
+/* ------------------------------------------------------------------ */
 /* Tiny markdown (for AI summaries)                                    */
 /* ------------------------------------------------------------------ */
 
@@ -1203,13 +1243,9 @@ async function boot() {
   $("#edit-form").addEventListener("submit", (e) => EditDialog.submit(e));
   $("#upload-btn").addEventListener("click", () => Upload.open());
   wirePlayerBar();
+  try { state.status = await api.get("/api/status"); } catch {}
   route();
-  try {
-    const st = await api.get("/api/status");
-    state.status = st;
-    const diar = st.diarization === "ready" ? "speakers on" : "speakers off";
-    $("#engine-status").textContent = `Whisper (${st.asr_engine}) · ${diar}`;
-    $("#engine-status").title = `Speech model: ${st.asr_model}\nSpeaker separation: ${st.diarization}\nAI summary (Ollama): ${st.ollama.running ? "running" : "not running"}\nData folder: ${st.data_dir}`;
-  } catch {}
+  Settings.watchSetup();
+  Settings.checkUpdateQuietly();
 }
-boot();
+document.addEventListener("DOMContentLoaded", boot);

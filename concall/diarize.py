@@ -1,8 +1,9 @@
 """Optional speaker separation ("who spoke when") with pyannote.audio.
 
-Needs `pip install -r requirements-diarization.txt` and a free Hugging Face token
-with the model's terms accepted (see README). Without it the app still works; the
-transcript just won't be split by speaker until an official transcript is attached.
+Needs a free Hugging Face token with the models' terms accepted, connected in
+Settings (the app then installs pyannote.audio itself). Without it the app still
+works; the transcript just isn't split by speaker until an official transcript
+is attached.
 """
 
 import wave
@@ -11,30 +12,33 @@ from typing import Optional
 from . import config
 
 
+def wanted() -> bool:
+    """The user has asked for speaker separation (Hugging Face connected and switched on)."""
+    return config.diarization_enabled() and config.hf_ready()
+
+
 def available() -> Optional[str]:
-    """Returns None if diarization can run, otherwise the reason it can't."""
-    if config.DIARIZATION == "off":
-        return "turned off (DIARIZATION=off)"
-    if not config.HF_TOKEN:
-        return "no HF_TOKEN set"
-    try:
-        import pyannote.audio  # noqa: F401
-    except ImportError:
-        return "pyannote.audio not installed"
+    """Returns None if diarization should run, otherwise the reason it won't."""
+    if not config.diarization_enabled():
+        return "turned off in Settings"
+    if not config.hf_token():
+        return "Hugging Face isn't connected (Settings → Speaker separation)"
+    if not config.hf_ready():
+        return "Hugging Face setup isn't finished (Settings → Speaker separation)"
     return None
 
 
-def _load_pipeline():
+def load_pipeline():
     from pyannote.audio import Pipeline
 
     try:  # pyannote.audio >= 4
-        pipeline = Pipeline.from_pretrained(config.DIARIZATION_MODEL, token=config.HF_TOKEN)
+        pipeline = Pipeline.from_pretrained(config.DIARIZATION_MODEL, token=config.hf_token())
     except TypeError:  # pyannote.audio 3.x
-        pipeline = Pipeline.from_pretrained(config.DIARIZATION_MODEL, use_auth_token=config.HF_TOKEN)
+        pipeline = Pipeline.from_pretrained(config.DIARIZATION_MODEL, use_auth_token=config.hf_token())
     if pipeline is None:
         raise RuntimeError(
             f"Could not load {config.DIARIZATION_MODEL}. Accept its terms on huggingface.co "
-            "with the account that owns HF_TOKEN."
+            "with the account you connected in Settings."
         )
     import torch
 
@@ -59,7 +63,7 @@ def _read_wav(path: str):
 
 def diarize(wav_path: str) -> list[dict]:
     """Returns [{"s": start, "e": end, "spk": "SPEAKER_00"}, ...] sorted by start."""
-    pipeline = _load_pipeline()
+    pipeline = load_pipeline()
     output = pipeline(_read_wav(wav_path))
     annotation = getattr(output, "speaker_diarization", output)  # 4.x wraps the result
     segs = [

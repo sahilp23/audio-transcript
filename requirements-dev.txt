@@ -1,4 +1,5 @@
 -r requirements.txt
+-r requirements-engine.txt
 pytest
 httpx
 reportlab
