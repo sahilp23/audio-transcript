@@ -2,6 +2,10 @@
 
 Each `## <version>` section becomes the release notes shown in the app's update screen.
 
+## 0.3.1
+- Fixed: connecting Groq failed with "Groq rejected this key" even for valid keys. Groq's firewall was blocking the app's requests; the app now identifies itself properly.
+- Clearer Groq error messages (an invalid key vs. a blocked request).
+
 ## 0.3.0
 - **Fast cloud transcription (free):** connect a free Groq account in Settings and a 1-hour call is transcribed in about a minute, without slowing your Mac.
 - If the cloud isn't available, the app now **asks first** before using your Mac, and offers a **gentle mode** that keeps the Mac usable (slower).

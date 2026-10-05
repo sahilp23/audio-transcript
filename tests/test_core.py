@@ -491,3 +491,31 @@ def test_enhance_creates_clear_voice_audio(client):
     assert meta["enhanced"] == "ready", meta
     a = client.get(f"/api/calls/{call_id}/audio?clear=1")
     assert a.status_code == 200 and len(a.content) > 1000
+
+
+def test_cloud_requests_send_a_user_agent_and_explain_errors(monkeypatch):
+    import email.message
+
+    from concall import cloud
+
+    seen = {}
+
+    def fake_urlopen(req, timeout=0):
+        seen["ua"] = req.get_header("User-agent")
+        seen["auth"] = req.get_header("Authorization")
+        hdrs = email.message.Message()
+        raise urllib.error.HTTPError(req.full_url, 403, "Forbidden", hdrs, io.BytesIO(b"error code: 1010"))
+
+    import urllib.error
+    monkeypatch.setattr(cloud.urllib.request, "urlopen", fake_urlopen)
+    r = cloud.check_key("gsk_abc")
+    assert seen["ua"].startswith("ConcallPlayer/") and "urllib" not in seen["ua"]
+    assert seen["auth"] == "Bearer gsk_abc"
+    assert "firewall" in r["error"] and "rejected this key" not in r["error"]
+
+    def fake_401(req, timeout=0):
+        raise urllib.error.HTTPError(req.full_url, 401, "Unauthorized", email.message.Message(),
+                                     io.BytesIO(b'{"error": {"message": "Invalid API Key"}}'))
+
+    monkeypatch.setattr(cloud.urllib.request, "urlopen", fake_401)
+    assert "Invalid API Key" in cloud.check_key("gsk_abc")["error"]

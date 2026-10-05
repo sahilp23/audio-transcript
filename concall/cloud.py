@@ -19,7 +19,7 @@ import urllib.request
 from pathlib import Path
 from typing import Callable
 
-from . import align, media
+from . import __version__, align, media
 
 API = "https://api.groq.com/openai/v1"
 MODEL = "whisper-large-v3-turbo"
@@ -36,9 +36,35 @@ class CloudUnavailable(Exception):
     """Groq can't transcribe right now (offline, limit reached, bad key...)."""
 
 
+# Groq sits behind Cloudflare, which blocks Python's default "Python-urllib"
+# user agent with 403 (error 1010) before the key is even checked.
+USER_AGENT = f"ConcallPlayer/{__version__} (macOS)"
+
+
 def _request(method: str, url: str, key: str, body: bytes = None, headers: dict = None, timeout: float = 300):
-    req = urllib.request.Request(url, data=body, method=method, headers={"Authorization": f"Bearer {key}", **(headers or {})})
+    req = urllib.request.Request(url, data=body, method=method, headers={
+        "Authorization": f"Bearer {key}", "User-Agent": USER_AGENT, "Accept": "application/json", **(headers or {})})
     return urllib.request.urlopen(req, timeout=timeout)
+
+
+def _error_detail(exc: urllib.error.HTTPError) -> str:
+    try:
+        raw = exc.read().decode(errors="replace")
+    except Exception:
+        return ""
+    try:
+        return str(json.loads(raw).get("error", {}).get("message", ""))[:200]
+    except (ValueError, AttributeError):
+        return ("blocked by Groq's firewall (Cloudflare)" if "1010" in raw or "cloudflare" in raw.lower() else raw[:200])
+
+
+def _http_problem(exc: urllib.error.HTTPError) -> str:
+    detail = _error_detail(exc)
+    if exc.code == 401:
+        return "Groq rejected this key" + (f" ({detail})" if detail else "") + ". Create a new key and paste it again."
+    if exc.code == 403:
+        return f"Groq refused the request (403{': ' + detail if detail else ''}). This is usually not your key; please use Report a problem."
+    return f"Groq said {exc.code}" + (f": {detail}" if detail else "") + ". Try again in a minute."
 
 
 def check_key(key: str) -> dict:
@@ -51,9 +77,7 @@ def check_key(key: str) -> dict:
         with _request("GET", f"{API}/models", key, timeout=20) as r:
             models = [m.get("id") for m in json.loads(r.read()).get("data", [])]
     except urllib.error.HTTPError as exc:
-        if exc.code in (401, 403):
-            return {"ok": False, "error": "Groq rejected this key. Create a new key and paste it again."}
-        return {"ok": False, "error": f"Groq said {exc.code}. Try again in a minute."}
+        return {"ok": False, "error": _http_problem(exc)}
     except Exception as exc:
         return {"ok": False, "error": f"Couldn't reach Groq. Check your internet connection. ({exc})"}
     if MODEL not in models:
@@ -97,9 +121,8 @@ def _transcribe_chunk(path: Path, key: str, prompt: str) -> dict:
             with _request("POST", f"{API}/audio/transcriptions", key, body, {"Content-Type": ctype}) as r:
                 return json.loads(r.read())
         except urllib.error.HTTPError as exc:
-            detail = exc.read().decode(errors="replace")[:300]
             if exc.code in (401, 403):
-                raise CloudUnavailable("Groq rejected the API key. Reconnect it in Settings.")
+                raise CloudUnavailable(_http_problem(exc))
             if exc.code == 429:
                 wait = float(exc.headers.get("retry-after") or 60)
                 if wait > MAX_WAIT or attempts > 3:
@@ -110,7 +133,7 @@ def _transcribe_chunk(path: Path, key: str, prompt: str) -> dict:
             if exc.code >= 500 and attempts <= 3:
                 time.sleep(5 * attempts)
                 continue
-            raise CloudUnavailable(f"Groq returned an error ({exc.code}): {detail}")
+            raise CloudUnavailable(_http_problem(exc))
         except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
             if attempts <= 2:
                 time.sleep(5)
