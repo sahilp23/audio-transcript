@@ -5,8 +5,10 @@ Engines:
   faster  faster-whisper, CPU (works on any machine, slower)
 """
 
+import sys
 import threading
 import types
+import wave
 from typing import Callable, Optional
 
 from . import config
@@ -70,7 +72,9 @@ def _clean_word(text: str, start: float, end: float, prob: float) -> Optional[di
 
 def _transcribe_mlx(wav_path: str, duration: float, prompt: str, progress: ProgressFn) -> list[dict]:
     import mlx_whisper
-    import mlx_whisper.transcribe as mt
+
+    # `mlx_whisper.transcribe` is the function (it shadows the submodule), so get the module itself.
+    mt = sys.modules["mlx_whisper.transcribe"]
 
     # mlx-whisper only reports progress through tqdm; swap in a shim that forwards updates.
     total_frames = {"n": 1, "done": 0}
@@ -115,12 +119,21 @@ def _transcribe_mlx(wav_path: str, duration: float, prompt: str, progress: Progr
     return words
 
 
+def _read_wav(path: str):
+    """16 kHz mono PCM wav -> float32 numpy array."""
+    import numpy as np
+
+    with wave.open(path, "rb") as f:
+        frames = f.readframes(f.getnframes())
+    return np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32768.0
+
+
 def _transcribe_faster(wav_path: str, duration: float, prompt: str, progress: ProgressFn) -> list[dict]:
     from faster_whisper import WhisperModel
 
     model = WhisperModel(config.FASTER_WHISPER_MODEL, device="auto", compute_type="int8")
     segments, _info = model.transcribe(
-        wav_path,
+        _read_wav(wav_path),  # decoded here: faster-whisper's own decoder breaks with some PyAV versions
         language="en",
         word_timestamps=True,
         initial_prompt=prompt,

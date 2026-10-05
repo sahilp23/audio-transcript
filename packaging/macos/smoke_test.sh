@@ -50,6 +50,19 @@ echo "Transcript: $TEXT"
 echo "$TEXT" | grep -iq "revenue" || { echo "✗ transcript doesn't contain 'revenue'"; exit 1; }
 echo "✓ transcription works"
 
+# The CPU engine (fallback when the Mac GPU path fails) must work too.
+ASR_ENGINE=faster PYTHONPATH="$APP/Contents/Resources/app" "$CONCALL_SUPPORT_DIR/venv/bin/python" - "$AUDIO" <<'PY'
+import sys, tempfile, os
+from concall import asr, media
+wav = os.path.join(tempfile.mkdtemp(), "a.wav")
+media.run("-i", sys.argv[1], "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", wav)
+out = asr.transcribe(wav, 10.0, asr.build_prompt("Smoke Test"), lambda p: None)
+text = " ".join(w["w"] for w in out["words"])
+print("faster-whisper:", out["engine"], text)
+assert out["engine"] == "faster" and "revenue" in text.lower(), text
+PY
+echo "✓ CPU fallback engine works"
+
 # Speaker separation package (installed when the user connects Hugging Face).
 curl -sf -X POST "${H[@]}" "$BASE/api/setup/speakers" >/dev/null
 speakers_done() { curl -sf "$BASE/api/setup" | json "d['components']['speakers']['state']" | grep -Eq "done|error"; }
