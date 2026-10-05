@@ -346,3 +346,18 @@ def test_media_duration(tmp_path):
     f = tmp_path / "a.mp3"
     f.write_bytes(_wav_bytes(4))
     assert abs(media.duration(f) - 4.0) < 0.2
+
+
+def test_pyannote_hub_compat_translates_old_token_argument():
+    from concall import diarize
+
+    calls = []
+
+    def new_style_download(repo, filename, *, token=None, cache_dir=None):  # no use_auth_token
+        calls.append((repo, filename, token))
+        return "/tmp/x"
+
+    shim = diarize.hub_download_compat(new_style_download)
+    assert shim("pyannote/x", "config.yaml", use_auth_token="hf_1", cache_dir=None) == "/tmp/x"
+    assert shim("pyannote/y", "pytorch_model.bin") == "/tmp/x"
+    assert calls == [("pyannote/x", "config.yaml", "hf_1"), ("pyannote/y", "pytorch_model.bin", None)]

@@ -70,4 +70,20 @@ wait_for 1200 "speaker separation install finished" speakers_done
 curl -sf "$BASE/api/setup" | json "d['components']['speakers']"
 curl -sf "$BASE/api/setup" | json "d['components']['speakers']['installed']" | grep -q True
 "$CONCALL_SUPPORT_DIR/venv/bin/python" -c "from pyannote.audio import Pipeline; import torch; print('pyannote ok, torch', torch.__version__)"
+
+# Loading a model goes through pyannote's Hugging Face download code (needs our
+# compatibility patch). Uses a public pyannote model, so no token is needed.
+PYTHONPATH="$APP/Contents/Resources/app" "$CONCALL_SUPPORT_DIR/venv/bin/python" - <<'PY'
+from concall import diarize
+diarize.patch_pyannote_hub()
+from pyannote.audio import Model
+try:
+    m = Model.from_pretrained("pyannote/wespeaker-voxceleb-resnet34-LM", use_auth_token=None)
+    print("pyannote model download ok:", type(m).__name__)
+except Exception as exc:
+    # A "gated"/permission error still proves the download call itself works.
+    assert "use_auth_token" not in str(exc) and "unexpected keyword" not in str(exc), exc
+    print("pyannote reached Hugging Face:", type(exc).__name__)
+PY
+echo "✓ speaker model download code works"
 echo "✓ all smoke tests passed"

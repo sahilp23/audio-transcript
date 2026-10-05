@@ -28,8 +28,42 @@ def available() -> Optional[str]:
     return None
 
 
+# pyannote.audio 3.x calls hf_hub_download(use_auth_token=...), an argument newer
+# huggingface_hub versions removed. Translate it to `token=` for those modules.
+_PYANNOTE_HUB_USERS = (
+    "pyannote.audio.core.pipeline",
+    "pyannote.audio.core.model",
+    "pyannote.audio.pipelines.speaker_verification",
+)
+
+
+def hub_download_compat(download):
+    def wrapper(*args, use_auth_token=None, **kwargs):
+        if use_auth_token is not None and "token" not in kwargs:
+            kwargs["token"] = use_auth_token
+        return download(*args, **kwargs)
+
+    wrapper.__concall_compat__ = True
+    return wrapper
+
+
+def patch_pyannote_hub() -> None:
+    import importlib
+
+    for name in _PYANNOTE_HUB_USERS:
+        try:
+            mod = importlib.import_module(name)
+        except ImportError:
+            continue
+        fn = getattr(mod, "hf_hub_download", None)
+        if fn is not None and not getattr(fn, "__concall_compat__", False):
+            mod.hf_hub_download = hub_download_compat(fn)
+
+
 def load_pipeline():
     from pyannote.audio import Pipeline
+
+    patch_pyannote_hub()
 
     try:  # pyannote.audio >= 4
         pipeline = Pipeline.from_pretrained(config.DIARIZATION_MODEL, token=config.hf_token())
