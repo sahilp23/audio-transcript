@@ -2,6 +2,11 @@
 
 Each `## <version>` section becomes the release notes shown in the app's update screen.
 
+## 0.7.0
+- **Concall Player website**: your own private copy on the internet (free hosting on Render), for any browser, including the office PC. Sign in with Google; calls are saved in your Google Drive. Setup guide: docs/WEBSITE.md.
+- **Export calls for the website** (Settings → Your data): copies your calls so you can import them on the website without transcribing again.
+- Removed "Use from other computers" (the Cloudflare link). The website replaces it.
+
 ## 0.6.1
 - Remote link: when Cloudflare's sign-in runs out (it lasts about 4 hours) or the connection to your Mac drops, the page now reloads so you can sign in again, instead of showing "Can't reach the app server · Failed to fetch". If your Mac really can't be reached, it says so and why.
 

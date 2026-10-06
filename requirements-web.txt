@@ -1,0 +1,3 @@
+# The website version (Render). Cloud transcription only, so no speech engine here.
+-r requirements.txt
+cryptography>=42

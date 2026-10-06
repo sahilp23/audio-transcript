@@ -41,11 +41,23 @@ IS_APPLE_SILICON = IS_MAC and platform.machine() == "arm64"
 IS_WINDOWS = platform.system() == "Windows"
 DEVICE = "Mac" if IS_MAC else "PC"  # for messages: "Transcribe on this Mac/PC?"
 APP_MODE = os.environ.get("CONCALL_APP") == "1"
+# Website mode (hosted, e.g. on Render): Google sign-in, calls stored in Google Drive,
+# cloud transcription only. See drivesync.py, webauth.py and docs/WEBSITE.md.
+WEB_MODE = os.environ.get("CONCALL_WEB") == "1"
+GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
+GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
+# Who may sign in: comma-separated email addresses.
+ALLOWED_EMAILS = {e.strip().lower() for e in os.environ.get("ALLOWED_EMAILS", "").split(",") if e.strip()}
+SECRET_KEY = os.environ.get("SECRET_KEY", "")  # encrypts the sign-in cookie
+# The site's public address; Render sets RENDER_EXTERNAL_URL automatically.
+PUBLIC_URL = (os.environ.get("PUBLIC_URL") or os.environ.get("RENDER_EXTERNAL_URL") or "").rstrip("/")
 
 if os.environ.get("CONCALL_SUPPORT_DIR"):
     SUPPORT_DIR = Path(os.environ["CONCALL_SUPPORT_DIR"]).expanduser()
 elif APP_MODE and IS_MAC:
     SUPPORT_DIR = Path.home() / "Library" / "Application Support" / "Concall Player"
+elif WEB_MODE:
+    SUPPORT_DIR = Path("/tmp/concall")  # temporary: the real copy is in Google Drive
 elif APP_MODE and IS_WINDOWS:
     SUPPORT_DIR = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local") / "Concall Player"
 else:
@@ -96,6 +108,7 @@ DEFAULTS = {
 }
 
 _lock = threading.Lock()
+on_settings_saved: list = []  # website mode: drivesync uploads settings.json to Google Drive
 
 
 def load_settings() -> dict:
@@ -141,7 +154,9 @@ def save_settings(patch: dict) -> dict:
         tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
         os.chmod(tmp, 0o600)  # holds the Hugging Face token and API keys
         replace_file(tmp, SETTINGS_FILE)
-        return data
+    for hook in on_settings_saved:
+        hook()
+    return data
 
 
 def hf_token() -> str:

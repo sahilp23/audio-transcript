@@ -1,4 +1,4 @@
-name: Mac & Windows app
+name: Mac & Windows app + website
 
 # Every push: run the tests, build the Mac app (.dmg) on a real Mac and the
 # Windows installer (.exe) on a real Windows PC, install each fresh and
@@ -99,8 +99,36 @@ jobs:
           name: Concall-Player-windows
           path: dist/Concall-Player-Setup.exe
 
+  website:
+    # The hosted version (Render, docs/WEBSITE.md): install it the way Render does and check it starts.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install like Render (requirements-web.txt) and start
+        env:
+          CONCALL_WEB: "1"
+          GOOGLE_CLIENT_ID: ci-client
+          GOOGLE_CLIENT_SECRET: ci-secret
+          ALLOWED_EMAILS: ci@example.com
+          SECRET_KEY: ci-secret-key
+          PUBLIC_URL: https://concall-ci.example
+        run: |
+          python -m venv /tmp/web && /tmp/web/bin/pip install -q -r requirements-web.txt
+          /tmp/web/bin/uvicorn concall.server:app --host 127.0.0.1 --port 10000 > /tmp/web.log 2>&1 &
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:10000/api/ping && break; sleep 1; done
+          curl -sf http://127.0.0.1:10000/api/ping
+          test "$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' http://127.0.0.1:10000/)" = "302 http://127.0.0.1:10000/auth/login"
+          curl -s -o /dev/null -w '%{redirect_url}\n' http://127.0.0.1:10000/auth/login | grep -q "^https://accounts.google.com/o/oauth2/v2/auth?client_id=ci-client"
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:10000/api/calls)" = "401"
+          echo "✓ website starts and requires Google sign-in"
+          cat /tmp/web.log
+
   publish:
-    needs: [mac, windows]
+    needs: [mac, windows, website]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

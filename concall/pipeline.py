@@ -41,7 +41,12 @@ def start_worker() -> None:
     except RuntimeError as exc:
         print(f"WARNING: {exc}")
     threading.Thread(target=_worker, daemon=True, name="concall-worker").start()
-    # Resume anything interrupted by a restart.
+    if not config.WEB_MODE:  # website: drivesync calls this once your calls are loaded from Drive
+        resume_interrupted()
+
+
+def resume_interrupted() -> None:
+    """Pick up calls that were waiting or being processed when the app stopped."""
     for meta in store.list_calls():
         if meta.get("status") in ("queued", "processing"):
             enqueue(meta["id"])
@@ -66,14 +71,16 @@ def _worker() -> None:
 def process(call_id: str) -> None:
     d = store.call_dir(call_id)
     meta = store.update_meta(call_id, status="processing", stage="Preparing audio", progress=0.02, error=None)
-    audio = d / meta["audio_file"]
+    audio = store.ensure_local(d / meta["audio_file"])
     warnings: list[str] = list(meta.get("upload_warnings") or [])
 
     duration = media.duration(audio)
     play_file = meta["audio_file"]
     if audio.suffix.lower() not in BROWSER_AUDIO:
         play_file = "play.m4a"
-        media.run("-i", str(audio), "-vn", "-ac", "1", "-c:a", "aac", "-b:a", "96k", str(d / play_file))
+        if not store.exists(d / play_file):
+            media.run("-i", str(audio), "-vn", "-ac", "1", "-c:a", "aac", "-b:a", "96k", str(d / play_file))
+            store.saved(d / play_file)
     store.update_meta(call_id, duration=duration, play_file=play_file)
 
     wav = d / "audio16k.wav"
@@ -82,12 +89,12 @@ def process(call_id: str) -> None:
     official = store.read_json(d / "official.json")
 
     try:
-        needs_local_asr = not asr_path.exists() and (meta.get("asr_route") or "cloud") != "cloud"
-        if needs_local_asr or (not diar_path.exists() and not official and diarize.wanted()):
+        needs_local_asr = not store.exists(asr_path) and (meta.get("asr_route") or "cloud") != "cloud"
+        if needs_local_asr or (not store.exists(diar_path) and not official and diarize.wanted()):
             media.run("-i", str(audio), "-vn", "-ac", "1", "-ar", "16000",
                       "-af", cloud.SPEECH_FILTER, "-c:a", "pcm_s16le", str(wav))
 
-        if not asr_path.exists():
+        if not store.exists(asr_path):
             names = [t["speaker"] for t in official["turns"]] if official else None
             prompt = asr.build_prompt(meta.get("company", ""), list(dict.fromkeys(names)) if names else None)
 
@@ -121,7 +128,7 @@ def process(call_id: str) -> None:
 
         # Speaker separation is only needed when there's no official transcript to name speakers.
         official = store.read_json(d / "official.json")
-        if not official and not diar_path.exists():
+        if not official and not store.exists(diar_path):
             reason = diarize.available()
             if reason is None:
                 # The transcript is usable already: show it while speakers are worked out.
@@ -186,8 +193,8 @@ def _transcribe_in_cloud(call_id, audio, duration, prompt, on_progress, warnings
         except cloud.CloudUnavailable as exc:
             problems.append(str(exc))
     if not gkey and not key:
-        ask_local(call_id, "Cloud transcription isn't connected yet (Gladia or Groq). Connect one in "
-                           f"Settings for fast transcription, or use this {config.DEVICE}.")
+        ask_local(call_id, "Cloud transcription isn't connected yet (Gladia or Groq). Connect one in Settings" +
+                  (" and press Try again." if config.WEB_MODE else f" for fast transcription, or use this {config.DEVICE}."))
     else:
         if not key:
             problems.append("Groq isn't connected as a backup.")
@@ -204,6 +211,8 @@ def ask_local(call_id: str, reason: str) -> None:
 def decide(call_id: str, choice: str) -> dict:
     if choice not in ("local", "local_gentle", "retry"):
         raise ValueError("choice must be local, local_gentle or retry")
+    if config.WEB_MODE and choice != "retry":
+        raise ValueError("The website can only transcribe in the cloud (Gladia or Groq).")
     if choice == "retry":
         config.save_settings({"gladia_paused_until": 0})  # you asked to try the cloud again: include Gladia
     store.update_meta(call_id, asr_route=None if choice == "retry" else choice, decision=None)
@@ -243,6 +252,6 @@ def rebuild_async(call_id: str) -> None:
             store.update_meta(call_id, status="error", error=str(exc), stage="Failed")
 
     meta = store.get_meta(call_id)
-    if meta.get("status") in ("queued", "processing") and not (store.call_dir(call_id) / "doc.json").exists():
+    if meta.get("status") in ("queued", "processing") and not store.exists(store.call_dir(call_id) / "doc.json"):
         return  # the running job will pick the transcript up when it builds the doc
     threading.Thread(target=run, daemon=True).start()

@@ -799,3 +799,248 @@ def test_windows_launcher_picks_update_and_rolls_back(tmp_path, monkeypatch):
     launcher.STARTING.unlink()
     launcher.CURRENT_FILE.write_text(str(code("old", "0.4.9")), encoding="utf-8")
     assert launcher.pick_code() == launcher.BUNDLED
+
+
+# ---------- Website mode: Google sign-in + Google Drive (with a pretend Drive) ----------
+
+class FakeDrive:
+    """In-memory stand-in for gdrive.Drive."""
+
+    def __init__(self, client_id="", client_secret="", refresh_token="rt1"):
+        self.refresh_token = refresh_token
+        self.files = {}  # id -> {"name", "mimeType", "parents", "appProperties", "data"}
+        self.n = 0
+
+    def access_token(self):
+        return "ya29.fake"
+
+    def _new(self, **f):
+        self.n += 1
+        fid = f"f{self.n}"
+        self.files[fid] = f
+        return fid
+
+    def list_files(self, query="trashed = false"):
+        out = [{"id": k, **{x: v[x] for x in ("name", "mimeType", "parents", "appProperties")}} for k, v in self.files.items()]
+        if " in parents" in query:
+            parent = query.split("'")[1]
+            out = [f for f in out if parent in f["parents"]]
+        return out
+
+    def create_folder(self, name, parent=None, props=None):
+        from concall import gdrive
+
+        return self._new(name=name, mimeType=gdrive.FOLDER, parents=[parent] if parent else [], appProperties=props or {})
+
+    def put(self, name, data, parent, props=None):
+        return self._new(name=name, mimeType="x", parents=[parent], appProperties=props or {}, data=data)
+
+    def upload_file(self, path, name, parent, props=None, file_id=None):
+        if file_id:
+            self.files[file_id]["data"] = Path(path).read_bytes()
+            return file_id
+        return self.put(name, Path(path).read_bytes(), parent, props)
+
+    def download(self, file_id, dest):
+        Path(dest).parent.mkdir(parents=True, exist_ok=True)
+        Path(dest).write_bytes(self.files[file_id]["data"])
+
+    def delete(self, file_id):
+        self.files.pop(file_id, None)
+        for k in [k for k, v in self.files.items() if file_id in v["parents"]]:
+            self.files.pop(k, None)
+
+    def named(self, name):
+        return [v for v in self.files.values() if v["name"] == name]
+
+
+WEB_ENV = dict(DIARIZATION="off", CONCALL_WEB="1", GOOGLE_CLIENT_ID="cid", GOOGLE_CLIENT_SECRET="csecret",
+               ALLOWED_EMAILS="me@example.com", SECRET_KEY="test-secret", PUBLIC_URL="https://concall.example")
+
+
+def web_app(tmp_path, monkeypatch, drive):
+    server = reload_app(tmp_path, monkeypatch, **WEB_ENV)
+    from concall import drivesync, gdrive, webauth
+
+    for m in (gdrive, drivesync, webauth):
+        importlib.reload(m)
+    importlib.reload(server)
+    monkeypatch.setattr(drivesync.gdrive, "Drive", lambda cid, secret, rt: drive)
+    from fastapi.testclient import TestClient
+
+    c = TestClient(server.app, base_url="https://concall.example", headers={"X-Concall": "1"})
+    return server, c
+
+
+def _sign_in(c):
+    from concall import webauth
+
+    c.cookies.set(webauth.SESSION_COOKIE, webauth.seal({"email": "me@example.com", "rt": "rt1", "at": time.time()}))
+
+
+def test_website_requires_google_sign_in(tmp_path, monkeypatch):
+    server, c = web_app(tmp_path, monkeypatch, FakeDrive())
+    with c:
+        r = c.get("/", follow_redirects=False)
+        assert r.status_code == 302 and r.headers["location"] == "/auth/login"
+        assert c.get("/api/calls").status_code == 401
+        assert c.get("/api/ping").status_code == 200
+        r = c.get("/auth/login", follow_redirects=False)
+        assert r.headers["location"].startswith("https://accounts.google.com/")
+        assert "drive.file" in r.headers["location"] and "access_type=offline" in r.headers["location"]
+        assert "redirect_uri=https%3A%2F%2Fconcall.example%2Fauth%2Fcallback" in r.headers["location"]
+        # A tampered or foreign cookie doesn't get in.
+        c.cookies.set("concall_session", "not-a-real-cookie")
+        assert c.get("/api/calls").status_code == 401
+        _sign_in(c)
+        assert c.get("/api/calls").status_code == 200
+        st = c.get("/api/status").json()
+        assert st["web"] is True and st["email"] == "me@example.com"
+        # Desktop-only things aren't available on the website.
+        assert c.post("/api/reveal", json={"what": "data"}).status_code == 404
+        assert c.post("/api/calls", data={"company": "x"}).status_code == 404
+
+
+def test_website_shows_setup_page_until_configured(tmp_path, monkeypatch):
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "")
+    server = reload_app(tmp_path, monkeypatch, **{**WEB_ENV, "GOOGLE_CLIENT_ID": ""})
+    from concall import webauth
+
+    importlib.reload(webauth)
+    importlib.reload(server)
+    from fastapi.testclient import TestClient
+
+    r = TestClient(server.app, base_url="https://concall.example").get("/")
+    assert r.status_code == 503 and "GOOGLE_CLIENT_ID" in r.text
+
+
+def test_google_sign_in_callback(tmp_path, monkeypatch):
+    server, c = web_app(tmp_path, monkeypatch, FakeDrive())
+    from concall import webauth
+
+    def fake_post(url, fields):
+        assert fields["code"] == "abc" and fields["redirect_uri"] == "https://concall.example/auth/callback"
+        return {"access_token": "at", "refresh_token": "rt-new", "scope": "openid email https://www.googleapis.com/auth/drive.file"}
+
+    who = {"email": "me@example.com", "email_verified": True}
+    monkeypatch.setattr(webauth, "_post_form", fake_post)
+    monkeypatch.setattr(webauth, "_get_json", lambda url, token: who)
+    r = c.get("/auth/login", follow_redirects=False)
+    state = r.headers["location"].split("state=")[1].split("&")[0]
+    # Without the state cookie from /auth/login (another browser), the sign-in is refused.
+    from fastapi.testclient import TestClient
+
+    other = TestClient(server.app, base_url="https://concall.example")
+    assert other.get(f"/auth/callback?code=abc&state={state}").status_code == 403
+    r = c.get(f"/auth/callback?code=abc&state={state}", follow_redirects=False)
+    assert r.status_code == 302 and webauth.SESSION_COOKIE in r.cookies
+    sess = webauth.session(r.cookies[webauth.SESSION_COOKIE])
+    assert sess["email"] == "me@example.com" and sess["rt"] == "rt-new"
+    assert "rt-new" not in r.cookies[webauth.SESSION_COOKIE]  # encrypted, not just signed
+    # Someone else's Google account is turned away.
+    who["email"] = "stranger@example.com"
+    r = c.get("/auth/login", follow_redirects=False)
+    state = r.headers["location"].split("state=")[1].split("&")[0]
+    r = c.get(f"/auth/callback?code=abc&state={state}", follow_redirects=False)
+    assert r.status_code == 403 and "isn't allowed" in r.text
+
+
+def test_website_keeps_calls_in_google_drive(tmp_path, monkeypatch):
+    drive = FakeDrive()
+    server, c = web_app(tmp_path, monkeypatch, drive)
+    from concall import config, drivesync, gladia
+
+    fake, diar, _ = make_asr()
+    monkeypatch.setattr(gladia, "transcribe", lambda audio, dur, key, progress: (
+        progress(1.0), {"asr": {"engine": "gladia", "model": "gladia", "words": fake["words"]}, "diar": diar})[1])
+    with c:
+        _sign_in(c)
+        c.get("/api/status")
+        assert drivesync.ready(10)
+        root = [k for k, v in drive.files.items() if v["name"] == "Concall Player"][0]
+        assert drive.files[root]["appProperties"] == {"concall": "root"}
+        # Keys entered in Settings are kept in Drive too (the server's disk is temporary).
+        config.save_settings({"gladia_key": "k" * 36})
+        # Add a call: the browser uploads the recording to Drive itself.
+        r = c.post("/api/calls/new", json={"company": "Demo", "period": "Q1", "filename": "call.mp3"}).json()
+        assert r["token"] == "ya29.fake" and r["name"] == "audio.mp3"
+        file_id = drive.put("audio.mp3", _wav_bytes(), r["folder"], r["props"])
+        call_id = r["meta"]["id"]
+        c.post(f"/api/calls/{call_id}/uploaded", json={"file_id": file_id})
+        meta = _wait_ready(c, call_id)
+        assert meta["status"] == "ready" and meta["asr_service"] == "gladia"
+        assert drivesync.flush(10)
+        for name in ("meta.json", "asr.json", "diar.json", "doc.json"):
+            assert drive.named(name), name
+        assert drive.named("settings.json")
+        c.patch(f"/api/calls/{call_id}/user", json={"notes": "check margins"})
+        assert drivesync.flush(10)
+
+    # The free host goes to sleep and its disk is wiped; a new visit restores everything from Drive.
+    import shutil
+
+    shutil.rmtree(config.DATA_DIR)
+    server, c = web_app(tmp_path, monkeypatch, drive)
+    from concall import config as config2, drivesync as ds2
+
+    with c:
+        _sign_in(c)
+        calls = c.get("/api/calls").json()
+        assert [m["id"] for m in calls] == [call_id]
+        assert c.get(f"/api/calls/{call_id}/user").json()["notes"] == "check margins"
+        assert c.get(f"/api/calls/{call_id}/doc").json()["speakers_separated"] is True
+        assert c.get(f"/api/calls/{call_id}/audio").status_code == 200
+        assert config2.load_settings()["gladia_key"] == "k" * 36
+        # Deleting a call removes it from Drive as well.
+        assert c.delete(f"/api/calls/{call_id}").status_code == 200
+        assert not drive.named("doc.json") and not drive.named(call_id)
+        assert ds2.ready(1)
+
+
+def test_website_imports_calls_from_the_mac_app(tmp_path, monkeypatch):
+    drive = FakeDrive()
+    server, c = web_app(tmp_path, monkeypatch, drive)
+    import json as _json
+
+    from concall import drivesync, structure
+
+    asr, diar, dur = make_asr()
+    doc = structure.build_from_asr(asr, diar, dur)
+    meta = {"id": "atlanta-q2-abc123", "company": "Atlanta Electricals", "period": "Q2", "date": "",
+            "audio_file": "audio.mp3", "status": "ready", "created_at": 1, "updated_at": 1}
+    with c:
+        _sign_in(c)
+        c.get("/api/status")
+        assert drivesync.ready(10)
+        start = c.post("/api/import/start", json={"call_id": meta["id"]}).json()
+        assert start["existing"] == []
+        for name, data in (("audio.mp3", _wav_bytes()), ("doc.json", _json.dumps(doc).encode()),
+                           ("meta.json", _json.dumps(meta).encode())):
+            drive.put(name, data, start["folder"], start["props"])
+        done = c.post("/api/import/done", json={"call_id": meta["id"]}).json()
+        assert done["company"] == "Atlanta Electricals" and done["status"] == "ready"
+        assert c.get(f"/api/calls/{meta['id']}/doc").status_code == 200
+        # Importing again skips what's already there.
+        assert set(c.post("/api/import/start", json={"call_id": meta["id"]}).json()["existing"]) == {
+            "audio.mp3", "doc.json", "meta.json"}
+        assert c.post("/api/import/start", json={"call_id": "../etc"}).status_code == 400
+
+
+def test_desktop_exports_calls_for_the_website(client, monkeypatch, tmp_path):
+    from concall import server
+
+    monkeypatch.setattr(server.Path, "home", lambda: tmp_path / "home")
+    r = client.post("/api/calls", data={"company": "Demo", "period": "Q1"},
+                    files={"audio": ("call.mp3", io.BytesIO(_wav_bytes()), "audio/mpeg")})
+    call_id = r.json()["id"]
+    assert _wait_ready(client, call_id)["status"] == "needs_input"
+    client.post(f"/api/calls/{call_id}/decision", json={"choice": "local"})
+    assert _wait_ready(client, call_id)["status"] == "ready"
+    monkeypatch.setattr(server.config, "IS_MAC", False)  # don't open Finder in the test
+    monkeypatch.setattr(server.config, "IS_WINDOWS", False)
+    out = client.post("/api/export_calls").json()
+    assert out["count"] == 1
+    exported = tmp_path / "home" / "Downloads" / "Concall Player calls" / call_id
+    assert (exported / "meta.json").exists() and (exported / "doc.json").exists() and (exported / "audio.mp3").exists()
+    assert not (exported / "audio16k.wav").exists()
+    assert client.post("/api/calls/new", json={"company": "x"}).status_code == 404

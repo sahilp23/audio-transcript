@@ -64,6 +64,7 @@ const Settings = {
     $("#update-banner").classList.add("hidden");
     const view = $("#view");
     view.innerHTML = `<div class="settings"><h1>Settings</h1><p class="muted">Loading…</p></div>`;
+    if (state.status?.web) { this.renderWeb(view); return; }
     let settings, setup, upd;
     try {
       [settings, setup, upd] = await Promise.all([api.get("/api/settings"), api.get("/api/setup"), api.get("/api/update").catch(() => null)]);
@@ -117,6 +118,7 @@ const Settings = {
           <p class="small">Calls, transcripts, bookmarks and notes are stored only on this ${DEV()}:<br><code>${esc(st.data_dir || "")}</code></p>
           <div class="row-actions">
             <button class="btn small" id="reveal-data">${IS_WIN() ? "Open folder" : "Show in Finder"}</button>
+            <button class="btn small ghost" id="export-calls" title="Copies your calls to Downloads, to import them on the Concall Player website">Export calls for the website</button>
             ${st.app_mode ? `<button class="btn small ghost" id="reveal-logs">Open log files</button>` : ""}
             <button class="btn small ghost" data-report="">Report a problem</button>
           </div>
@@ -127,6 +129,12 @@ const Settings = {
     this.renderUpdate();
     $("#auto-update").onchange = (e) => api.patch("/api/settings", { auto_update_check: e.target.checked });
     $("#reveal-data").onclick = () => api.post("/api/reveal", { what: "data" }).catch((e) => toast(e.message));
+    $("#export-calls").onclick = async () => {
+      try {
+        const r = await api.post("/api/export_calls");
+        toast(`Copied ${r.count} call${r.count === 1 ? "" : "s"} to Downloads → “Concall Player calls”. On the website: Settings → Import calls.`, 8000);
+      } catch (e) { toast(e.message); }
+    };
     $("#reveal-logs")?.addEventListener("click", () => api.post("/api/reveal", { what: "logs" }).catch((e) => toast(e.message)));
   },
 
@@ -238,6 +246,54 @@ const Settings = {
       if (this.hfResult.ok) toast("All set. Setting up speaker separation…", 4000);
       this.refresh();
     });
+  },
+
+  /* ---------- website (hosted) version ---------- */
+
+  async renderWeb(view) {
+    let setup;
+    try { setup = await api.get("/api/setup"); } catch (e) { view.innerHTML = `<div class="settings"><p class="error">${esc(e.message)}</p></div>`; return; }
+    if (state.page !== "settings") return;
+    this.setup = setup;
+    const st = state.status || {};
+    view.innerHTML = `
+      <div class="settings">
+        <a href="#/" class="back">← Your calls</a>
+        <h1>Settings</h1>
+
+        <section class="card" id="gladia-card">
+          <h2>Transcription + speakers <span class="badge">cloud via Gladia · free 10 h/month</span></h2>
+          <p class="muted small">Tried first. Gladia transcribes each call <b>and</b> tells the speakers apart. The free plan covers about 10 hours of audio a month (calls up to 2¼ hours each). When the free hours run out, Groq below is used.</p>
+          <div id="gladia-body"></div>
+        </section>
+
+        <section class="card" id="groq-card">
+          <h2>Backup transcription <span class="badge">cloud via Groq · free</span></h2>
+          <p class="muted small">Used when Gladia isn't connected or its free hours are used up: a 1-hour call takes about a minute, but without speaker separation. The free plan covers roughly 8 hours of audio a day.</p>
+          <div id="groq-body"></div>
+        </section>
+
+        <section class="card">
+          <h2>Your calls <span class="badge">in Google Drive</span></h2>
+          <p class="small">Calls, transcripts, bookmarks and notes are saved in the <b>Concall Player</b> folder in the Google Drive of <b>${esc(st.email || "")}</b>. The website can only see that folder, not the rest of your Drive.</p>
+          <div class="mode-box"><div class="title">Copy calls from the Mac app</div>
+            <ol class="small">
+              <li>In the Mac app: <b>Settings → Your data → Export calls for the website</b>. This puts a <b>Concall Player calls</b> folder in Downloads.</li>
+              <li>Here: click <b>Import calls</b> and choose that folder (on the Mac). Calls you already imported are skipped.</li>
+            </ol>
+            <input type="file" id="import-input" webkitdirectory multiple hidden>
+            <button class="btn primary small" id="import-btn">Import calls</button>
+            <div id="import-log" class="small"></div>
+          </div>
+          <div class="row-actions"><a class="btn small ghost" href="/auth/logout">Sign out</a>
+            <button class="btn small ghost" data-report="">Report a problem</button></div>
+        </section>
+        <p class="muted small center">Concall Player ${esc(st.version || "")} · website</p>
+      </div>`;
+    this.renderGladia();
+    this.renderGroq();
+    $("#import-btn").onclick = () => $("#import-input").click();
+    $("#import-input").onchange = (e) => importCalls([...e.target.files]);
   },
 
   renderGladia() {
@@ -401,3 +457,47 @@ const Settings = {
     this.renderUpdate();
   },
 };
+
+
+/* Website: import call folders exported by the Mac app ("Concall Player calls/<call id>/files").
+   Files go straight from this browser into Google Drive. */
+async function importCalls(files) {
+  const log = $("#import-log");
+  const byCall = {};
+  for (const f of files) {
+    const parts = (f.webkitRelativePath || f.name).split("/");
+    if (parts.length < 2) continue;
+    const callId = parts[parts.length - 2], name = parts[parts.length - 1];
+    if (!/^[a-z0-9-]{4,80}$/.test(callId) || name.startsWith(".") || /\.(tmp|download)$/.test(name)) continue;
+    (byCall[callId] = byCall[callId] || []).push({ file: f, name });
+  }
+  const ids = Object.keys(byCall).filter((id) => byCall[id].some((x) => x.name === "meta.json"));
+  if (!ids.length) { log.innerHTML = `<p class="error">That folder has no Concall Player calls. Choose the “Concall Player calls” folder in Downloads.</p>`; return; }
+  $("#import-btn").disabled = true;
+  let done = 0, skipped = 0, failed = 0;
+  for (const id of ids) {
+    const line = document.createElement("div");
+    line.textContent = `${id}: starting…`;
+    log.appendChild(line);
+    try {
+      const start = await api.post("/api/import/start", { call_id: id });
+      const todo = byCall[id].filter((x) => !start.existing.includes(x.name));
+      if (!todo.length) { line.textContent = `${id}: already imported`; skipped++; continue; }
+      // meta.json last, so a half-imported call never looks finished.
+      todo.sort((a, b) => (a.name === "meta.json") - (b.name === "meta.json"));
+      let i = 0;
+      for (const x of todo) {
+        i++;
+        await driveUpload(x.file, x.name, start.folder, start.token, start.props,
+          (p) => (line.textContent = `${id}: file ${i} of ${todo.length} (${Math.round(p * 100)}%)`));
+      }
+      const meta = await api.post("/api/import/done", { call_id: id });
+      line.textContent = `✓ ${meta.company} ${meta.period || ""}`;
+      done++;
+    } catch (e) { line.textContent = `✗ ${id}: ${e.message}`; failed++; }
+  }
+  $("#import-btn").disabled = false;
+  const summary = document.createElement("p");
+  summary.innerHTML = `<b>Imported ${done}</b>${skipped ? `, ${skipped} already there` : ""}${failed ? `, <span class="error">${failed} failed</span>` : ""}.`;
+  log.appendChild(summary);
+}

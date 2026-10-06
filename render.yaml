@@ -1,0 +1,24 @@
+# Concall Player website on Render's free plan (see docs/WEBSITE.md for the full setup).
+# Render reads this file when you choose New → Blueprint and pick this repository.
+services:
+  - type: web
+    name: concall-player
+    runtime: python
+    plan: free
+    branch: main
+    buildCommand: pip install -r requirements-web.txt
+    startCommand: uvicorn concall.server:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/ping
+    envVars:
+      - key: CONCALL_WEB
+        value: "1"
+      - key: PYTHON_VERSION
+        value: "3.12.10"
+      - key: SECRET_KEY  # encrypts the sign-in cookie; Render makes a random one
+        generateValue: true
+      - key: GOOGLE_CLIENT_ID  # from Google Cloud (docs/WEBSITE.md, part 2)
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: ALLOWED_EMAILS  # your Google address; comma-separate to allow more than one
+        sync: false

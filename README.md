@@ -22,7 +22,9 @@ It's built for the companies Quartr doesn't cover. The company's official transc
 
 ## Install
 
-**Mac or Windows app (recommended):** see **[INSTALL.md](INSTALL.md)**. On a Mac you download a `.dmg` and drag the app to Applications; on Windows you run `Concall-Player-Setup.exe`. No Terminal needed. The app installs its speech engine on its own, has a guided Hugging Face setup in Settings, and updates itself.
+**Website (any browser, e.g. a locked-down office PC):** your own copy on Render's free plan, with calls saved in your Google Drive. Setup: **[docs/WEBSITE.md](docs/WEBSITE.md)**.
+
+**Mac or Windows app:** see **[INSTALL.md](INSTALL.md)**. On a Mac you download a `.dmg` and drag the app to Applications; on Windows you run `Concall-Player-Setup.exe`. No Terminal needed. The app installs its speech engine on its own, has a guided Hugging Face setup in Settings, and updates itself.
 
 **From source (developers):**
 
@@ -69,6 +71,8 @@ Speaker roles are read from the participants list on the first page. Page header
 | `concall/cloud.py` | Groq cloud transcription (chunked upload, word timings; backup when Gladia can't) |
 | `concall/asr.py`, `diarize.py` | On-Mac Whisper (mlx / faster-whisper) and pyannote wrappers |
 | `concall/isolated.py` | Runs heavy model work in a separate low-priority process |
+| `concall/webauth.py`, `drivesync.py`, `gdrive.py` | Website mode: Google sign-in, calls kept in Google Drive |
+| `render.yaml`, `requirements-web.txt` | Website hosting on Render |
 | `concall/report.py` | "Report a problem": redacted GitHub issue links |
 | `concall/transcript_parser.py`, `align.py`, `structure.py` | Company-transcript parsing, audio alignment, chapters/speakers/key numbers |
 | `concall/components.py` | Installs the speech engine and speaker separation in the background |

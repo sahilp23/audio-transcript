@@ -47,6 +47,7 @@ const api = {
     if (body instanceof FormData) opts.body = body;
     else if (body !== undefined) { opts.body = JSON.stringify(body); opts.headers["Content-Type"] = "application/json"; }
     const r = await fetch(url, opts);
+    if (r.status === 401 && state.status?.web) { location.href = "/auth/login"; throw new Error("Please sign in again"); }
     if (!r.ok) {
       let msg = r.statusText;
       try { msg = (await r.json()).detail || msg; } catch {}
@@ -167,6 +168,14 @@ function callCard(c) {
 }
 
 function decisionHtml(meta) {
+  if (state.status?.web) {
+    return `<div class="decision">
+      <div class="title">Waiting for cloud transcription</div>
+      <p class="small">${esc(meta.decision?.reason || "Cloud transcription isn't available right now.")}</p>
+      <div class="row-actions center-row"><button class="btn primary" data-choice="retry">Try again</button>
+      <a class="btn ghost" href="#/settings">Open Settings</a></div>
+    </div>`;
+  }
   const gentleDefault = Settings.setup?.mac?.gentle ?? true;
   return `<div class="decision">
       <div class="title">Transcribe on this ${DEV()} instead?</div>
@@ -258,6 +267,7 @@ const Upload = {
   },
   submit(e) {
     e.preventDefault();
+    if (state.status?.web) return this.submitWeb();
     const form = $("#upload-form");
     const fd = new FormData(form);
     if (!fd.get("transcript")?.name) fd.delete("transcript");
@@ -290,6 +300,62 @@ const Upload = {
     xhr.send(fd);
   },
 };
+
+Upload.submitWeb = async function () {
+  // Website: the recording goes straight from this browser into your Google Drive.
+  const form = $("#upload-form");
+  const fd = new FormData(form);
+  const audio = fd.get("audio");
+  const err = $("#upload-error"), prog = $("#upload-progress"), bar = $(".bar > div", prog);
+  const btn = $("button[type=submit]", form);
+  err.classList.add("hidden"); prog.classList.remove("hidden"); bar.style.width = "0%"; btn.disabled = true;
+  let callId = null;
+  try {
+    if (!audio?.name) throw new Error("Choose the call recording first.");
+    const start = await api.post("/api/calls/new", { company: fd.get("company"), period: fd.get("period"), date: fd.get("date"), filename: audio.name });
+    callId = start.meta.id;
+    const fileId = await driveUpload(audio, start.name, start.folder, start.token, start.props, (p) => (bar.style.width = `${p * 100}%`));
+    await api.post(`/api/calls/${callId}/uploaded`, { file_id: fileId });
+    const tfile = fd.get("transcript"), ttext = (fd.get("transcript_text") || "").trim();
+    if (tfile?.name || ttext) {
+      const tfd = new FormData();
+      if (tfile?.name) tfd.append("transcript", tfile); else tfd.append("transcript_text", ttext);
+      try { await api.post(`/api/calls/${callId}/transcript`, tfd); } catch (e) { toast(`Transcript not attached: ${e.message}`, 6000); }
+    }
+    $("#upload-dialog").close();
+    location.hash = `#/call/${callId}`;
+  } catch (e) {
+    err.textContent = e.message || "Upload failed";
+    err.classList.remove("hidden"); prog.classList.add("hidden");
+    if (callId) api.del(`/api/calls/${callId}`).catch(() => {});
+  } finally { btn.disabled = false; }
+};
+
+/* Upload a file from this browser into a Google Drive folder (resumable upload; the token is
+   a short-lived one the website hands out, limited to Concall Player's own files). */
+async function driveUpload(file, name, folder, token, props, onProgress) {
+  const auth = { Authorization: `Bearer ${token}` };
+  const type = file.type || "application/octet-stream";
+  const init = await fetch("https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id", {
+    method: "POST",
+    headers: { ...auth, "Content-Type": "application/json; charset=UTF-8", "X-Upload-Content-Type": type, "X-Upload-Content-Length": String(file.size) },
+    body: JSON.stringify({ name, parents: [folder], appProperties: props || {} }),
+  });
+  if (!init.ok) throw new Error(`Google Drive refused the upload (${init.status}). Try signing out and in again.`);
+  const session = init.headers.get("Location");
+  if (!session) throw new Error("Google Drive didn't start the upload. Please use Report a problem.");
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("PUT", session);
+    xhr.upload.onprogress = (ev) => { if (ev.lengthComputable && onProgress) onProgress(ev.loaded / ev.total); };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) { try { resolve(JSON.parse(xhr.responseText).id); } catch { reject(new Error("Unexpected answer from Google Drive")); } }
+      else reject(new Error(`Upload to Google Drive failed (${xhr.status})`));
+    };
+    xhr.onerror = () => reject(new Error("Upload to Google Drive failed. Check your internet connection."));
+    xhr.send(file);
+  });
+}
 
 const TranscriptDialog = {
   open(callId, after) {
@@ -508,7 +574,7 @@ const Player = {
             </div>
           </div>
           <nav class="side-tabs" id="side-tabs">
-            ${[["chapters", "Chapters"], ["highlights", "Key numbers"], ["bookmarks", "Bookmarks"], ["speakers", "Speakers"], ["notes", "Notes"], ["summary", "Summary"]]
+            ${[["chapters", "Chapters"], ["highlights", "Key numbers"], ["bookmarks", "Bookmarks"], ["speakers", "Speakers"], ["notes", "Notes"], ...(state.status?.web ? [] : [["summary", "Summary"]])]
               .map(([k, l]) => `<button data-tab="${k}" class="${this.tab === k ? "on" : ""}">${l}</button>`).join("")}
           </nav>
           <div class="side-panel" id="side-panel"></div>
