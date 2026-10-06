@@ -16,7 +16,7 @@ from pathlib import Path
 
 import uvicorn
 
-from . import __version__, components, config, media
+from . import __version__, components, config, media, remote
 
 
 def _free_port(preferred: int) -> int:
@@ -75,6 +75,7 @@ def main() -> None:
 
     if config.APP_MODE:
         components.auto_setup()
+        remote.autostart()
 
     if os.environ.get("CONCALL_HEADLESS") == "1":
         _mark_started()
@@ -100,6 +101,7 @@ def main() -> None:
         webbrowser.open(url)
         thread.join()
         return
+    remote.shutdown()
     os._exit(0)  # window closed: stop the server and any background work
 
 

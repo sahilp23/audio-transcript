@@ -47,6 +47,7 @@ const api = {
     if (body instanceof FormData) opts.body = body;
     else if (body !== undefined) { opts.body = JSON.stringify(body); opts.headers["Content-Type"] = "application/json"; }
     const r = await fetch(url, opts);
+    if (r.status === 401 && state.status?.remote) { location.href = "/login"; throw new Error("Please sign in again"); }
     if (!r.ok) {
       let msg = r.statusText;
       try { msg = (await r.json()).detail || msg; } catch {}
@@ -278,6 +279,7 @@ const Upload = {
       } else {
         let msg = xhr.statusText;
         try { msg = JSON.parse(xhr.responseText).detail || msg; } catch {}
+        if (xhr.status === 413) msg = "This file is too big to upload through the remote link (Cloudflare allows about 100 MB). Use an MP3/M4A, or add it on the computer running Concall Player.";
         err.textContent = typeof msg === "string" ? msg : "Upload failed";
         err.classList.remove("hidden");
         prog.classList.add("hidden");
@@ -1268,7 +1270,8 @@ document.addEventListener("keydown", (e) => {
 /* App-window helpers (the Mac app window can't do browser downloads)  */
 /* ------------------------------------------------------------------ */
 
-const inApp = () => !!state.status?.app_mode;
+// In the app's own window (not a browser, and not the remote link from another computer).
+const inApp = () => !!state.status?.app_mode && !state.status?.remote;
 
 function sidePanelHidden() {
   let saved = null;
@@ -1282,7 +1285,7 @@ async function copyText(text) {
 }
 
 async function saveFile(filename, text) {
-  if (state.status?.platform === "darwin") {
+  if (state.status?.platform === "darwin" && !state.status?.remote) {
     const r = await api.post("/api/export", { filename, text });
     toast(`Saved to Downloads: ${r.path.split("/").pop()}`, 4000);
     return;

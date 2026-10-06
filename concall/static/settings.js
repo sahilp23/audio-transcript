@@ -40,7 +40,7 @@ const Settings = {
   },
 
   async checkUpdateQuietly() {
-    if (!state.status?.app_mode) return;
+    if (!state.status?.app_mode || state.status?.remote) return;
     try {
       const s = await api.get("/api/settings");
       if (!s.auto_update_check) return;
@@ -64,6 +64,7 @@ const Settings = {
     $("#update-banner").classList.add("hidden");
     const view = $("#view");
     view.innerHTML = `<div class="settings"><h1>Settings</h1><p class="muted">Loading…</p></div>`;
+    if (state.status?.remote) { this.renderRemotePage(view); return; }
     let settings, setup, upd;
     try {
       [settings, setup, upd] = await Promise.all([api.get("/api/settings"), api.get("/api/setup"), api.get("/api/update").catch(() => null)]);
@@ -101,6 +102,12 @@ const Settings = {
           <div id="hf-body"></div>
         </section>
 
+        <section class="card" id="remote-card">
+          <h2>Use from other computers <span class="badge">via Cloudflare · free</span></h2>
+          <p class="muted small">Open Concall Player from another computer's web browser (e.g. your office PC), with nothing to install there. This ${DEV()} stays in charge: it must be <b>on, awake and online</b>, with Concall Player open. Two locks protect it: a one-time code sent to your email (by Cloudflare), and a password you choose here.</p>
+          <div id="remote-body"></div>
+        </section>
+
         <section class="card">
           <h2>AI summaries <span class="badge">optional</span></h2>
           <div id="ollama-body">${this.ollamaHtml(st.ollama || {})}</div>
@@ -125,6 +132,7 @@ const Settings = {
       </div>`;
     this.renderSetupBlocks();
     this.renderUpdate();
+    this.renderRemote();
     $("#auto-update").onchange = (e) => api.patch("/api/settings", { auto_update_check: e.target.checked });
     $("#reveal-data").onclick = () => api.post("/api/reveal", { what: "data" }).catch((e) => toast(e.message));
     $("#reveal-logs")?.addEventListener("click", () => api.post("/api/reveal", { what: "logs" }).catch((e) => toast(e.message)));
@@ -321,6 +329,94 @@ const Settings = {
     };
     $("#groq-connect").onclick = connect;
     $("#groq-key").addEventListener("keydown", (e) => { if (e.key === "Enter") connect(); });
+  },
+
+  /* ---------- use from other computers (remote.py) ---------- */
+
+  async renderRemote() {
+    const el = $("#remote-body");
+    if (!el || state.page !== "settings") return;
+    if (el.contains(document.activeElement) && document.activeElement.tagName === "INPUT") return;
+    let r;
+    try { r = await api.get("/api/remote"); } catch (e) { el.innerHTML = `<p class="error small">${esc(e.message)}</p>`; return; }
+    clearTimeout(this.remoteTimer);
+    if (r.state === "starting" || (r.enabled && r.state !== "on")) this.remoteTimer = setTimeout(() => this.renderRemote(), 2000);
+    if (!r.available) { el.innerHTML = `<p class="small muted">Not available on this computer.</p>`; return; }
+    const form = (editing) => `
+      <ol class="steps">
+        <li class="step"><span class="num">1</span><div class="grow"><div class="title">Your email address</div>
+          <div class="small muted">Only this address can open the link. Cloudflare emails it a short code each time you sign in on a new browser.</div>
+          <div class="token-row"><input id="remote-email" type="email" placeholder="you@example.com" value="${esc(r.email || "")}" autocomplete="off"></div></div></li>
+        <li class="step"><span class="num">2</span><div class="grow"><div class="title">${editing && r.has_password ? "New password (leave empty to keep the current one)" : "Choose a password"}</div>
+          <div class="small muted">At least 8 characters. You'll type it once per browser (it's remembered for 30 days).</div>
+          <div class="token-row"><input id="remote-pw" type="password" autocomplete="new-password" placeholder="Password">
+          <button class="btn primary small" id="remote-save">Save</button></div>
+          <div id="remote-msg" class="small">${this.remoteError ? `<span class="error">${esc(this.remoteError)}</span>` : ""}</div></div></li>
+      </ol>`;
+    if (!r.email || !r.has_password || this.remoteEditing) {
+      el.innerHTML = form(true) + (this.remoteEditing ? `<button class="btn small ghost" id="remote-cancel">Cancel</button>` : "");
+      $("#remote-cancel")?.addEventListener("click", () => { this.remoteEditing = false; this.remoteError = ""; this.renderRemote(); });
+      $("#remote-save").onclick = async () => {
+        $("#remote-msg").innerHTML = `<span class="spinner"></span> Saving…`;
+        try {
+          const res = await api.post("/api/remote/setup", { email: $("#remote-email").value.trim(), password: $("#remote-pw").value });
+          this.remoteError = res.ok ? "" : res.error;
+          if (res.ok) { this.remoteEditing = false; toast("Saved.", 2500); }
+        } catch (e) { this.remoteError = e.message; }
+        document.activeElement?.blur();
+        this.renderRemote();
+      };
+      return;
+    }
+    const change = `<button class="btn small ghost" id="remote-edit">Change email or password</button>`;
+    let body;
+    if (r.state === "on" && r.url) {
+      body = `<div class="status-row"><span class="dot ok">✓</span><div class="grow"><div class="title">On. Your link:</div>
+          <div class="token-row"><input id="remote-url" readonly value="${esc(r.url)}"><button class="btn small" id="remote-copy">Copy</button></div>
+          <div class="small muted">Open it on the other computer and sign in with <b>${esc(r.email)}</b> and your password.
+          <b>The link changes</b> when Concall Player or this ${DEV()} restarts, so check here (or email it to yourself) after a restart.
+          Keep this ${DEV()} plugged in with the lid open; it's kept awake while this is on.</div>
+          <div class="row-actions"><button class="btn small" id="remote-mail">Email me the link</button>
+          <button class="btn small ghost" id="remote-stop">Turn off</button> ${change}</div></div></div>`;
+    } else if (r.enabled) {
+      body = `<div class="status-row"><span class="spinner"></span><div class="grow"><div class="title">${esc(r.message || "Starting…")}</div>
+          ${r.error ? `<div class="small error">${esc(r.error)}</div>` : ""}
+          <div class="row-actions"><button class="btn small ghost" id="remote-stop">Turn off</button></div></div></div>`;
+    } else {
+      body = `<div class="status-row"><span class="dot"></span><div class="grow"><div class="title">Off</div>
+          <div class="small muted">Email ${esc(r.email)} · password set.</div>
+          <div class="row-actions"><button class="btn primary small" id="remote-start">Turn on</button> ${change}</div></div></div>`;
+    }
+    el.innerHTML = body;
+    $("#remote-edit")?.addEventListener("click", () => { this.remoteEditing = true; this.renderRemote(); });
+    $("#remote-start")?.addEventListener("click", async () => {
+      try { const res = await api.post("/api/remote/start"); if (!res.ok) toast(res.error); } catch (e) { toast(e.message); }
+      this.renderRemote();
+    });
+    $("#remote-stop")?.addEventListener("click", async () => {
+      if (!confirm("Turn off the link? The other computer will lose access until you turn it on again (with a new link).")) return;
+      await api.post("/api/remote/stop"); this.renderRemote();
+    });
+    $("#remote-copy")?.addEventListener("click", () => copyText(r.url).then(() => toast("Link copied.", 2000)));
+    $("#remote-mail")?.addEventListener("click", () => api.post("/api/remote/email").catch((e) => toast(e.message)));
+  },
+
+  renderRemotePage(view) {
+    view.innerHTML = `
+      <div class="settings">
+        <a href="#/" class="back">← Your calls</a>
+        <h1>Settings</h1>
+        <section class="card">
+          <h2>Using Concall Player remotely</h2>
+          <p class="small">You're connected to Concall Player running on your ${esc(state.status?.platform === "windows" ? "PC" : "Mac")} through your private link.
+          Settings, connections and updates can only be changed on that computer.</p>
+          <p class="small muted">Big recordings: uploads through the link are limited to about 100 MB per file.</p>
+          <div class="row-actions"><button class="btn small" id="remote-logout">Sign out of this browser</button>
+          <button class="btn small ghost" data-report="">Report a problem</button></div>
+        </section>
+        <p class="muted small center">Concall Player ${esc(state.status?.version || "")}</p>
+      </div>`;
+    $("#remote-logout").onclick = async () => { await api.post("/api/remote/logout"); location.href = "/login"; };
   },
 
   renderMacMode() {

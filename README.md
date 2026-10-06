@@ -69,6 +69,7 @@ Speaker roles are read from the participants list on the first page. Page header
 | `concall/cloud.py` | Groq cloud transcription (chunked upload, word timings; backup when Gladia can't) |
 | `concall/asr.py`, `diarize.py` | On-Mac Whisper (mlx / faster-whisper) and pyannote wrappers |
 | `concall/isolated.py` | Runs heavy model work in a separate low-priority process |
+| `concall/remote.py` | "Use from other computers": Cloudflare quick tunnel (email-locked) + password sessions |
 | `concall/report.py` | "Report a problem": redacted GitHub issue links |
 | `concall/transcript_parser.py`, `align.py`, `structure.py` | Company-transcript parsing, audio alignment, chapters/speakers/key numbers |
 | `concall/components.py` | Installs the speech engine and speaker separation in the background |

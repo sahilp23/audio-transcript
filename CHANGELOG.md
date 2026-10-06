@@ -2,6 +2,10 @@
 
 Each `## <version>` section becomes the release notes shown in the app's update screen.
 
+## 0.6.0
+- **Use Concall Player from another computer** (e.g. a locked-down office PC), with nothing to install there: Settings → **Use from other computers** → set your email and a password → **Turn on**. You get a private link that opens the app running on your Mac. Two locks: a one-time code emailed to you (by Cloudflare), and your password.
+- Your Mac must stay on, awake and online with Concall Player open; it's kept from sleeping while this is on (keep the lid open). The link changes when the app restarts: **Copy** or **Email me the link** in Settings.
+
 ## 0.5.0
 - **Concall Player for Windows:** download `Concall-Player-Setup.exe` from the Releases page. It installs for your Windows user only (no administrator rights needed) and works like the Mac app, including cloud transcription, in-app updates and Report a problem.
 - Messages say "this PC" or "this Mac" depending on the computer.
