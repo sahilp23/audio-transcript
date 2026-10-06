@@ -144,8 +144,8 @@ if wait_for 180 "Cloudflare link created" remote_on; then
   # A brand-new link takes a little while to resolve. Ask Cloudflare's DNS directly (the
   # system resolver may have cached "doesn't exist yet"), and fall back to the system one.
   for i in $(seq 1 60); do
-    if [ $((i % 2)) -eq 1 ]; then DNS=(--doh-url https://1.1.1.1/dns-query); else DNS=(); fi
-    WHERE=$(curl -sS -o /dev/null --max-time 15 "${DNS[@]}" -w "%{http_code} %{redirect_url}" "$LINK/" 2>&1 || true)
+    if [ $((i % 2)) -eq 1 ]; then DOH="https://1.1.1.1/dns-query"; else DOH=""; fi
+    WHERE=$(curl -sS -o /dev/null --max-time 15 ${DOH:+--doh-url "$DOH"} -w "%{http_code} %{redirect_url}" "$LINK/" 2>&1 || true)
     if echo "$WHERE" | grep -q "302 https://login.trycloudflare.com"; then LOCKED=1; break; fi
     sleep 3
   done
