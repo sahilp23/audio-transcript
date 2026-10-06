@@ -2,6 +2,10 @@
 
 Each `## <version>` section becomes the release notes shown in the app's update screen.
 
+## 0.7.1
+- Website: when Google ends your sign-in (weekly while the Google project is in "Testing"), you're taken straight to Google's sign-in instead of seeing an error.
+- Website setup: stray spaces in the Google codes are ignored, and a wrong-looking Client ID is explained on the page. The guide now uses Testing mode with yourself as a test user (publishing needs a domain you own).
+
 ## 0.7.0
 - **Concall Player website**: your own private copy on the internet (free hosting on Render), for any browser, including the office PC. Sign in with Google; calls are saved in your Google Drive. Setup guide: docs/WEBSITE.md.
 - **Export calls for the website** (Settings → Your data): copies your calls so you can import them on the website without transcribing again.

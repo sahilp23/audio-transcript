@@ -44,11 +44,12 @@ APP_MODE = os.environ.get("CONCALL_APP") == "1"
 # Website mode (hosted, e.g. on Render): Google sign-in, calls stored in Google Drive,
 # cloud transcription only. See drivesync.py, webauth.py and docs/WEBSITE.md.
 WEB_MODE = os.environ.get("CONCALL_WEB") == "1"
-GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
-GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
+# .strip(): values pasted into a hosting dashboard often carry a stray space or newline.
+GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "").strip().strip('"')
+GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "").strip().strip('"')
 # Who may sign in: comma-separated email addresses.
 ALLOWED_EMAILS = {e.strip().lower() for e in os.environ.get("ALLOWED_EMAILS", "").split(",") if e.strip()}
-SECRET_KEY = os.environ.get("SECRET_KEY", "")  # encrypts the sign-in cookie
+SECRET_KEY = os.environ.get("SECRET_KEY", "").strip()  # encrypts the sign-in cookie
 # The site's public address; Render sets RENDER_EXTERNAL_URL automatically.
 PUBLIC_URL = (os.environ.get("PUBLIC_URL") or os.environ.get("RENDER_EXTERNAL_URL") or "").rstrip("/")
 

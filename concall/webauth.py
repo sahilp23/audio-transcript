@@ -39,7 +39,12 @@ def configured() -> Optional[str]:
         ("GOOGLE_CLIENT_ID", config.GOOGLE_CLIENT_ID), ("GOOGLE_CLIENT_SECRET", config.GOOGLE_CLIENT_SECRET),
         ("ALLOWED_EMAILS", config.ALLOWED_EMAILS), ("SECRET_KEY", config.SECRET_KEY),
         ("PUBLIC_URL", config.PUBLIC_URL)) if not value]
-    return ", ".join(missing) or None
+    if missing:
+        return "Missing settings on the host: " + ", ".join(missing) + "."
+    if not config.GOOGLE_CLIENT_ID.endswith(".apps.googleusercontent.com"):
+        return ("GOOGLE_CLIENT_ID doesn't look right: it should end in .apps.googleusercontent.com. "
+                "Copy the Client ID again from Google Cloud → Google Auth Platform → Clients.")
+    return None
 
 
 def _fernet():

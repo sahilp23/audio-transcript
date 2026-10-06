@@ -35,16 +35,17 @@ Opening that address now shows *"Almost there"*. That's expected until Part 3 is
    - Audience: **External** → **Next**
    - Contact email: your address → **Next** → agree → **Create**
 5. In Google Auth Platform → **Data access** → **Add or remove scopes**. Tick **`.../auth/drive.file`** ("See, edit, create and delete only the specific Google Drive files you use with this app"). If it isn't in the list, paste `https://www.googleapis.com/auth/drive.file` under *Manually add scopes*. → **Update** → **Save**.
-6. **Audience** → **Publish app** → **Confirm**. This matters: while an app is in "Testing", Google signs you out every 7 days.
+6. **Audience** → **Test users** → **Add users** → add your own Gmail address → **Save**. Leave the app in **Testing**.
+   - *Why not "Publish app"?* Google only allows publishing with a homepage on a domain you own, and a free `onrender.com` address can't be registered as yours. In Testing, Google asks you to **sign in again about once a week**; the website takes you straight to Google's sign-in when that happens. It's two clicks, and your calls are unaffected.
 7. **Clients** → **Create client**:
    - Application type: **Web application**. Name: `Concall Player website`.
    - **Authorized redirect URIs** → **Add URI**: your Render address from Part 1 followed by `/auth/callback`, e.g. `https://concall-player.onrender.com/auth/callback`
-   - **Create**. Copy the **Client ID** and **Client secret** that appear.
+   - **Create**. Copy the **Client ID** (it ends in `.apps.googleusercontent.com`) and the **Client secret**.
 
 ## Part 3: Put the Google codes into Render (2 min)
 
 1. Render → **concall-player** → **Environment**.
-2. Edit **GOOGLE_CLIENT_ID** and **GOOGLE_CLIENT_SECRET**: replace `later` with the values from Part 2.
+2. Edit **GOOGLE_CLIENT_ID** and **GOOGLE_CLIENT_SECRET**: replace `later` with the values from Part 2. Paste exactly, with no quotes. If the website later says *"OAuth client was not found"*, the Client ID here doesn't match the one in Google Cloud: copy it again.
 3. **Save changes**. Render restarts the website (about a minute).
 
 ## Part 4: Sign in

@@ -76,6 +76,13 @@ def connect(refresh_token: str, email: str = "") -> None:
     threading.Thread(target=_load, daemon=True, name="drive-load").start()
 
 
+def signin_expired(message: str) -> None:
+    """Google refused the token: the next signed-in request brings a fresh one."""
+    global _error
+    _error = message
+    _ready.clear()
+
+
 def connected() -> bool:
     return _drive is not None
 

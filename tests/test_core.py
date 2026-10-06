@@ -854,7 +854,7 @@ class FakeDrive:
         return [v for v in self.files.values() if v["name"] == name]
 
 
-WEB_ENV = dict(DIARIZATION="off", CONCALL_WEB="1", GOOGLE_CLIENT_ID="cid", GOOGLE_CLIENT_SECRET="csecret",
+WEB_ENV = dict(DIARIZATION="off", CONCALL_WEB="1", GOOGLE_CLIENT_ID="cid.apps.googleusercontent.com", GOOGLE_CLIENT_SECRET="csecret",
                ALLOWED_EMAILS="me@example.com", SECRET_KEY="test-secret", PUBLIC_URL="https://concall.example")
 
 
@@ -1084,3 +1084,37 @@ def test_website_retries_loading_drive_after_a_hiccup(tmp_path, monkeypatch):
                 break
             time.sleep(0.1)
         assert c.get("/api/calls").status_code == 200
+
+
+def test_website_explains_a_wrong_client_id(tmp_path, monkeypatch):
+    server = reload_app(tmp_path, monkeypatch, **{**WEB_ENV, "GOOGLE_CLIENT_ID": " later "})
+    from concall import config, webauth
+
+    importlib.reload(webauth)
+    importlib.reload(server)
+    from fastapi.testclient import TestClient
+
+    assert config.GOOGLE_CLIENT_ID == "later"  # stray spaces removed
+    r = TestClient(server.app, base_url="https://concall.example").get("/")
+    assert r.status_code == 503 and ".apps.googleusercontent.com" in r.text
+
+
+def test_website_asks_to_sign_in_again_when_google_ends_the_session(tmp_path, monkeypatch):
+    drive = FakeDrive()
+    server, c = web_app(tmp_path, monkeypatch, drive)
+    from concall import drivesync, gdrive
+
+    with c:
+        _sign_in(c)
+        assert c.get("/api/calls").status_code == 200
+        r = c.post("/api/calls/new", json={"company": "Demo", "filename": "a.mp3"}).json()
+        file_id = drive.put("audio.mp3", _wav_bytes(), r["folder"], r["props"])
+        drivesync.register(r["meta"]["id"], "audio.mp3", file_id)
+
+        def expired(*a, **k):
+            raise gdrive.AuthExpired("Google sign-in expired. Please sign in again.")
+
+        monkeypatch.setattr(drive, "download", expired)
+        resp = c.get(f"/api/calls/{r['meta']['id']}/audio")
+        assert resp.status_code == 401 and "sign in again" in resp.json()["detail"]
+        assert drivesync.status()["error"]

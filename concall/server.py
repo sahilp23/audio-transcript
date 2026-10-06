@@ -17,7 +17,7 @@ from starlette.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import (__version__, asr, cloud, components, config, diarize, drivesync, gladia, hf, isolated, media, pipeline,
+from . import (__version__, asr, cloud, components, config, diarize, drivesync, gdrive, gladia, hf, isolated, media, pipeline,
                report, store, summarize, transcript_parser, updater, webauth)
 
 STATIC = Path(__file__).parent / "static"
@@ -60,8 +60,9 @@ async def _web_guard(request: Request, call_next, path: str):
         return await call_next(request)
     missing = webauth.configured()
     if missing:
-        return _page("Almost there", f"<p>The website isn't fully set up yet. Missing settings on the host: "
-                                     f"<b>{missing}</b>.</p><p>See the setup guide (docs/WEBSITE.md).</p>", 503)
+        return _page("Almost there", f"<p>The website isn't fully set up yet.</p><p><b>{missing}</b></p>"
+                                     f"<p>After changing it on Render (Environment), wait a minute for the restart. "
+                                     f"Setup guide: docs/WEBSITE.md.</p>", 503)
     sess = webauth.session(request.cookies.get(webauth.SESSION_COOKIE))
     if not sess:
         if path.startswith("/api/"):
@@ -125,6 +126,18 @@ def auth_callback(request: Request, code: str = "", state: str = "", error: str 
 def auth_logout():
     resp = _page("Signed out", '<p>You\'re signed out of Concall Player on this browser.</p>'
                                '<a class="btn" href="/auth/login">Sign in</a>')
+    resp.delete_cookie(webauth.SESSION_COOKIE, path="/")
+    return resp
+
+
+@app.exception_handler(gdrive.AuthExpired)
+async def _google_signin_expired(request: Request, exc: gdrive.AuthExpired):
+    """Website: Google ended the sign-in (in "Testing" mode that's weekly): sign in again."""
+    drivesync.signin_expired(str(exc))
+    if request.url.path.startswith("/api/"):
+        resp = JSONResponse({"detail": str(exc)}, status_code=401)
+    else:
+        resp = RedirectResponse("/auth/login", status_code=302)
     resp.delete_cookie(webauth.SESSION_COOKIE, path="/")
     return resp
 
