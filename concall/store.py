@@ -49,9 +49,10 @@ def read_json(path: Path, default: Any = None) -> Any:
 
 
 def write_json(path: Path, data: Any) -> None:
-    tmp = path.with_suffix(path.suffix + ".tmp")
+    # A temp name per write, so two threads saving the same file never share one.
+    tmp = path.with_suffix(f"{path.suffix}.{threading.get_ident()}.tmp")
     tmp.write_text(json.dumps(data, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
-    os.replace(tmp, path)
+    config.replace_file(tmp, path)
 
 
 def get_meta(call_id: str) -> dict:

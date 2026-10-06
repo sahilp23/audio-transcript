@@ -1,4 +1,4 @@
-"""Runtime settings.
+r"""Runtime settings.
 
 Two ways to run:
   * Desktop app (CONCALL_APP=1, set by the launcher): everything lives in
@@ -16,6 +16,7 @@ import os
 import platform
 import sys
 import threading
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -105,6 +106,19 @@ def load_settings() -> dict:
     return {**DEFAULTS, **data}
 
 
+def replace_file(tmp: Path, path: Path) -> None:
+    """os.replace that copes with Windows: there, replacing a file fails while another
+    thread is reading it (the window polls a call's status while it's being saved)."""
+    for attempt in range(20):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            if not IS_WINDOWS or attempt == 19:
+                raise
+            time.sleep(0.05)
+
+
 def save_settings(patch: dict) -> dict:
     with _lock:
         data = load_settings()
@@ -113,7 +127,7 @@ def save_settings(patch: dict) -> dict:
         tmp = SETTINGS_FILE.with_suffix(".tmp")
         tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
         os.chmod(tmp, 0o600)  # holds the Hugging Face token and API keys
-        os.replace(tmp, SETTINGS_FILE)
+        replace_file(tmp, SETTINGS_FILE)
         return data
 
 
