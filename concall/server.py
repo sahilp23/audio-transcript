@@ -67,7 +67,7 @@ async def _web_guard(request: Request, call_next, path: str):
         if path.startswith("/api/"):
             return JSONResponse({"detail": "Please sign in again"}, status_code=401)
         return RedirectResponse("/auth/login", status_code=302)
-    drivesync.connect(sess["rt"])
+    drivesync.connect(sess["rt"], sess["email"])
     if any(path.startswith(p) for p in DESKTOP_ONLY) or (path == "/api/calls" and request.method == "POST"):
         return JSONResponse({"detail": "Not available on the website."}, status_code=404)
     if path.startswith("/api/") and path not in ("/api/status", "/api/drive", "/api/settings", "/api/setup"):

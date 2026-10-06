@@ -46,18 +46,32 @@ _pending: "queue.Queue[str]" = queue.Queue()
 _queued: set[str] = set()
 _worker: Optional[threading.Thread] = None
 _error: Optional[str] = None
+_email = ""
+_loading = False
 
 
 # ---------- connection ----------
 
-def connect(refresh_token: str) -> None:
-    """Called with the signed-in user's Google token (each request; cheap after the first)."""
-    global _drive
+def connect(refresh_token: str, email: str = "") -> None:
+    """Called on every signed-in request (cheap once connected).
+
+    Each browser you sign in on has its own Google token; any of them works, so the
+    first one is kept (switching would reload everything). A new token is only taken
+    over when the current one stopped working. A failed load is retried."""
+    global _drive, _email, _loading
     with _lock:
-        if _drive is not None and _drive.refresh_token == refresh_token:
+        same_user = _drive is not None and _email == email
+        token_broken = bool(_error and "sign in again" in _error)
+        if same_user and not token_broken:
+            if _ready.is_set() or _loading:
+                return
+        else:
+            _drive = gdrive.Drive(config.GOOGLE_CLIENT_ID, config.GOOGLE_CLIENT_SECRET, refresh_token)
+            _email = email
+            _ready.clear()
+        if _loading:
             return
-        _drive = gdrive.Drive(config.GOOGLE_CLIENT_ID, config.GOOGLE_CLIENT_SECRET, refresh_token)
-        _ready.clear()
+        _loading = True
     _install_hooks()
     threading.Thread(target=_load, daemon=True, name="drive-load").start()
 
@@ -87,7 +101,7 @@ def access_token() -> str:
 
 def _load() -> None:
     """Find (or create) the Concall Player folder, index everything, pull the small files."""
-    global _root, _settings_id, _error
+    global _root, _settings_id, _error, _loading
     try:
         d = drive()
         files = d.list_files()
@@ -130,6 +144,8 @@ def _load() -> None:
     except Exception as exc:
         traceback.print_exc()
         _error = f"Couldn't load your calls from Google Drive: {exc}"
+    finally:
+        _loading = False
 
 
 # ---------- mapping local paths <-> Drive ----------

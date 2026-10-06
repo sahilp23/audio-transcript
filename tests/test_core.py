@@ -1044,3 +1044,43 @@ def test_desktop_exports_calls_for_the_website(client, monkeypatch, tmp_path):
     assert (exported / "meta.json").exists() and (exported / "doc.json").exists() and (exported / "audio.mp3").exists()
     assert not (exported / "audio16k.wav").exists()
     assert client.post("/api/calls/new", json={"company": "x"}).status_code == 404
+
+
+def test_website_keeps_one_drive_connection_across_browsers(tmp_path, monkeypatch):
+    drive = FakeDrive()
+    server, c = web_app(tmp_path, monkeypatch, drive)
+    from concall import drivesync, webauth
+
+    made = []
+    monkeypatch.setattr(drivesync.gdrive, "Drive", lambda cid, secret, rt: (made.append(rt), drive)[1])
+    with c:
+        for rt in ("token-mac", "token-office", "token-mac"):
+            c.cookies.set(webauth.SESSION_COOKIE, webauth.seal({"email": "me@example.com", "rt": rt, "at": time.time()}))
+            assert c.get("/api/calls").status_code == 200
+        assert made == ["token-mac"]  # the second browser didn't trigger a reload
+
+
+def test_website_retries_loading_drive_after_a_hiccup(tmp_path, monkeypatch):
+    drive = FakeDrive()
+    server, c = web_app(tmp_path, monkeypatch, drive)
+    from concall import drivesync, gdrive
+
+    real = drive.list_files
+    calls = []
+
+    def flaky(query="trashed = false"):
+        calls.append(1)
+        if len(calls) == 1:
+            raise gdrive.DriveError("Couldn't reach Google Drive: timed out")
+        return real(query)
+
+    drive.list_files = flaky
+    monkeypatch.setattr(drivesync, "ready", lambda timeout=None: drivesync._ready.wait(min(timeout or 0, 2)))
+    with c:
+        _sign_in(c)
+        assert c.get("/api/calls").status_code == 503  # first load failed
+        for _ in range(50):
+            if c.get("/api/calls").status_code == 200:
+                break
+            time.sleep(0.1)
+        assert c.get("/api/calls").status_code == 200
