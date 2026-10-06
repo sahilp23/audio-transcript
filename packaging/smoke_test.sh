@@ -49,6 +49,7 @@ wait_for() {  # wait_for <seconds> <description> <command...>
   done
   echo "✗ timed out: $what"; return 1
 }
+show() { local x; x="$(cat)"; echo "$x" >&2; echo "$x"; }  # like `tee /dev/stderr` (missing on Windows)
 json() { "$HOSTPY" -c "import sys,json; d=json.load(sys.stdin); print($1)"; }
 
 wait_for 600 "app started (first-launch setup)" curl -sf "$BASE/api/ping"
@@ -83,7 +84,7 @@ decide() { curl -sf -X POST "${H[@]}" -H "Content-Type: application/json" -d "{\
 # 1. No cloud key: the app must ask before using the computer, then transcribe locally (fast mode).
 ID=$(upload "Q1")
 wait_status "$ID" "needs_input" 120 >/dev/null
-echo "✓ asks before transcribing on the Mac"
+echo "✓ asks before transcribing on this computer"
 decide "$ID" local
 wait_status "$ID" "ready" 600 >/dev/null
 TEXT=$(text_of "$ID"); echo "Local (fast): $TEXT"
@@ -103,7 +104,7 @@ echo "✓ local transcription (gentle) works"
 curl -sf -X POST "${H[@]}" "$BASE/api/calls/$ID/enhance" >/dev/null
 enhanced() { curl -sf "$BASE/api/calls/$ID" | json "d.get('enhanced')" | grep -Eq "ready|error"; }
 wait_for 300 "clear-voice audio finished" enhanced
-curl -sf "$BASE/api/calls/$ID" | json "d.get('enhanced'), d.get('enhanced_error')" | tee /dev/stderr | grep -q "ready"
+curl -sf "$BASE/api/calls/$ID" | json "d.get('enhanced'), d.get('enhanced_error')" | show | grep -q "ready"
 curl -sf -o /dev/null "$BASE/api/calls/$ID/audio?clear=1"
 echo "✓ clear voice works"
 
@@ -148,7 +149,7 @@ if [ -n "${CI_GLADIA_KEY:-}" ]; then
   curl -sf -X POST "${H[@]}" -H "Content-Type: application/json" -d "{\"key\": \"$CI_GLADIA_KEY\"}" "$BASE/api/gladia/connect" | json "d['ok']" | grep -q True
   ID4=$(upload "Q4")
   wait_status "$ID4" "ready" 600 >/dev/null
-  curl -sf "$BASE/api/calls/$ID4" | json "d.get('asr_service'), d.get('warnings')" | tee /dev/stderr | grep -q "gladia"
+  curl -sf "$BASE/api/calls/$ID4" | json "d.get('asr_service'), d.get('warnings')" | show | grep -q "gladia"
   TEXT=$(text_of "$ID4"); echo "Gladia: $TEXT"
   echo "$TEXT" | grep -iq "revenue"
   curl -sf "$BASE/api/calls/$ID4/doc" | json "d['speakers_separated']" | grep -q True
@@ -161,7 +162,7 @@ if [ -n "${CI_HF_TOKEN:-}" ]; then
   curl -sf -X POST "${H[@]}" -H "Content-Type: application/json" -d "{\"token\": \"$CI_HF_TOKEN\"}" "$BASE/api/hf/connect" | json "d['ok']" | grep -q True
   model_ready() { curl -sf "$BASE/api/setup" | json "d['components']['speaker_model']['state']" | grep -Eq "done|error"; }
   wait_for 900 "speaker models downloaded" model_ready
-  curl -sf "$BASE/api/setup" | json "d['components']['speaker_model']" | tee /dev/stderr | grep -q "'done'"
+  curl -sf "$BASE/api/setup" | json "d['components']['speaker_model']" | show | grep -q "'done'"
   curl -sf -X POST "${H[@]}" "$BASE/api/calls/$ID/speakers" >/dev/null
   wait_status "$ID" "ready" 900 >/dev/null
   curl -sf "$BASE/api/calls/$ID" | json "d.get('warnings')"
