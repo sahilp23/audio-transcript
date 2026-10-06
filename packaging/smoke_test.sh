@@ -133,31 +133,6 @@ print("pyannote model loaded:", type(m).__name__)
 PY
 echo "✓ speaker model loads"
 
-# 5b. Use from other computers: a real Cloudflare link, locked by email (visitors get sent to Cloudflare's sign-in).
-curl -sf -X POST "${H[@]}" -H "Content-Type: application/json" -d '{"email": "smoke@example.com", "password": "smoke-test-pw"}' \
-  "$BASE/api/remote/setup" | json "d['ok']" | grep -q True
-curl -sf -X POST "${H[@]}" "$BASE/api/remote/start" >/dev/null
-remote_on() { curl -sf "$BASE/api/remote" | json "d['state']" | grep -q "^on$"; }
-if wait_for 180 "Cloudflare link created" remote_on; then
-  LINK=$(curl -sf "$BASE/api/remote" | json "d['url']"); echo "Link: $LINK"
-  LOCKED=""
-  # A brand-new link takes a little while to resolve. Ask Cloudflare's DNS directly (the
-  # system resolver may have cached "doesn't exist yet"), and fall back to the system one.
-  for i in $(seq 1 60); do
-    if [ $((i % 2)) -eq 1 ]; then DOH="https://1.1.1.1/dns-query"; else DOH=""; fi
-    WHERE=$(curl -sS -o /dev/null --max-time 15 ${DOH:+--doh-url "$DOH"} -w "%{http_code} %{redirect_url}" "$LINK/" 2>&1 || true)
-    if echo "$WHERE" | grep -q "302 https://login.trycloudflare.com"; then LOCKED=1; break; fi
-    sleep 3
-  done
-  echo "Unauthenticated visit: $WHERE"
-  [ -n "$LOCKED" ] || { echo "✗ the link isn't behind Cloudflare's email sign-in"; exit 1; }
-  echo "✓ remote link works and is locked to the email address"
-else
-  curl -sf "$BASE/api/remote" | show
-  exit 1
-fi
-curl -sf -X POST "${H[@]}" "$BASE/api/remote/stop" >/dev/null
-
 # 6. Optional, only when the repository has these secrets: Groq, Gladia and full speaker separation.
 if [ -n "${CI_GROQ_KEY:-}" ]; then
   curl -sf -X POST "${H[@]}" -H "Content-Type: application/json" -d "{\"key\": \"$CI_GROQ_KEY\"}" "$BASE/api/groq/connect" | json "d['ok']" | grep -q True

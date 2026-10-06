@@ -136,8 +136,5 @@ def restart() -> bool:
         subprocess.Popen([exe, config.APP_PATH, "--after-pid", str(os.getpid())], creationflags=flags, close_fds=True)
     else:
         subprocess.Popen(["/bin/sh", "-c", 'sleep 2; /usr/bin/open "$0"', config.APP_PATH], start_new_session=True)
-    from . import remote
-
-    remote.shutdown()
     threading.Timer(0.5, lambda: os._exit(0)).start()
     return True

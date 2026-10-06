@@ -16,7 +16,7 @@ from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import (__version__, asr, cloud, components, config, diarize, gladia, hf, isolated, media, pipeline, remote, report,
+from . import (__version__, asr, cloud, components, config, diarize, gladia, hf, isolated, media, pipeline, report,
                store, summarize, transcript_parser, updater)
 
 STATIC = Path(__file__).parent / "static"
@@ -34,12 +34,6 @@ app = FastAPI(title="Concall Player", lifespan=lifespan)
 ALLOWED_HOSTS = {"127.0.0.1", "localhost"}
 
 
-# Things that only make sense, or are only safe, on the computer running the app.
-REMOTE_BLOCKED = ("/api/open", "/api/reveal", "/api/clipboard", "/api/export", "/api/update/install",
-                  "/api/update/restart", "/api/remote", "/api/setup/", "/api/hf/", "/api/groq/", "/api/gladia/")
-REMOTE_OPEN = ("/login", "/api/remote/login", "/api/ping")
-
-
 @app.middleware("http")
 async def local_only(request: Request, call_next):
     # Only this app's own page may call the API: block other websites open in a
@@ -49,24 +43,8 @@ async def local_only(request: Request, call_next):
         if request.headers.get("x-concall") != "1":
             return JSONResponse({"detail": "Missing app header"}, status_code=403)
     host = (request.headers.get("host") or "").rsplit(":", 1)[0]
-    if remote.is_remote(request.scope):
-        # Arrived through the Cloudflare link (see remote.py): sign-in required.
-        if not host.endswith(".trycloudflare.com") and host != "testserver":
-            return JSONResponse({"detail": "Forbidden host"}, status_code=403)
-        if path not in REMOTE_OPEN and not remote.session_valid(request.cookies.get(remote.SESSION_COOKIE)):
-            if path.startswith("/api/"):
-                return JSONResponse({"detail": "Please sign in again"}, status_code=401)
-            return RedirectResponse("/login", status_code=302)
-        if path not in ("/api/remote/login", "/api/remote/logout") and (
-                any(path.startswith(p) for p in REMOTE_BLOCKED)
-                or (path == "/api/settings" and request.method != "GET")):
-            return JSONResponse({"detail": f"This can only be done on the {config.DEVICE} running Concall Player."},
-                                status_code=403)
-        return await call_next(request)
     if host not in ALLOWED_HOSTS and host != "testserver":
         return JSONResponse({"detail": "Forbidden host"}, status_code=403)
-    if path == "/login":
-        return RedirectResponse("/", status_code=302)
     return await call_next(request)
 
 
@@ -111,7 +89,6 @@ def ping():
 def status(request: Request):
     engine = asr.pick_engine()
     return {
-        "remote": remote.is_remote(request.scope),
         "version": __version__,
         "app_mode": config.APP_MODE,
         "platform": platform.system().lower(),
@@ -213,7 +190,7 @@ def get_settings():
 
 
 def _public_settings(s: dict) -> dict:
-    for secret in ("hf_token", "groq_key", "gladia_key", "remote_password", "remote_sessions"):
+    for secret in ("hf_token", "groq_key", "gladia_key"):
         s.pop(secret, None)
     return s
 
@@ -224,66 +201,6 @@ def patch_settings(body: dict):
     if "mac_mode" in allowed and allowed["mac_mode"] not in ("auto", "gentle", "fast"):
         raise HTTPException(400, "mac_mode must be auto, gentle or fast")
     return _public_settings(config.save_settings(allowed))
-
-
-@app.get("/api/remote")
-def remote_status():
-    return remote.status()
-
-
-@app.post("/api/remote/setup")
-def remote_setup(body: dict):
-    return remote.configure(str(body.get("email") or ""), str(body.get("password") or ""))
-
-
-@app.post("/api/remote/start")
-def remote_start():
-    return remote.start()
-
-
-@app.post("/api/remote/stop")
-def remote_stop():
-    return remote.stop()
-
-
-@app.post("/api/remote/email")
-def remote_email_link():
-    """Open a new email to yourself with the current link (in the Mail app)."""
-    st = remote.status()
-    if not st["url"] or not st["email"]:
-        raise HTTPException(400, "The link isn't ready yet")
-    from urllib.parse import quote
-
-    body = f"Your Concall Player link (works while your {config.DEVICE} is on):\n{st['url']}"
-    _open(f"mailto:{st['email']}?subject={quote('Concall Player link')}&body={quote(body)}")
-    return {"ok": True}
-
-
-@app.post("/api/remote/login")
-def remote_login(body: dict):
-    try:
-        token = remote.login(str(body.get("password") or ""))
-    except PermissionError as exc:
-        return JSONResponse({"ok": False, "error": str(exc)}, status_code=429)
-    if not token:
-        return JSONResponse({"ok": False, "error": "Wrong password."}, status_code=401)
-    resp = JSONResponse({"ok": True})
-    resp.set_cookie(remote.SESSION_COOKIE, token, max_age=remote.SESSION_DAYS * 86400, httponly=True,
-                    secure=True, samesite="lax", path="/")
-    return resp
-
-
-@app.post("/api/remote/logout")
-def remote_logout(request: Request):
-    remote.logout(request.cookies.get(remote.SESSION_COOKIE))
-    resp = JSONResponse({"ok": True})
-    resp.delete_cookie(remote.SESSION_COOKIE, path="/")
-    return resp
-
-
-@app.get("/login")
-def login_page():
-    return HTMLResponse((STATIC / "login.html").read_text(encoding="utf-8"))
 
 
 @app.get("/api/update")

@@ -41,33 +41,12 @@ function toast(msg, ms = 2600) {
   toast._t = setTimeout(() => el.classList.add("hidden"), ms);
 }
 
-/* Opened through the "Use from other computers" link (a Cloudflare address). */
-const viaLink = () => location.hostname.endsWith(".trycloudflare.com");
-const LINK_LOST = "Lost the connection to the computer running Concall Player. It may be asleep, switched off or offline, or its link has changed (see Settings → Use from other computers on that computer).";
-
-// Through the link, a request that fails outright usually means Cloudflare's email sign-in
-// (valid 4 hours) has expired: background requests can't show it, but a page reload can.
-function linkLost() {
-  let last = 0;
-  try { last = +sessionStorage.getItem("linkReloadAt") || 0; } catch {}
-  if (Date.now() - last > 60000) {
-    try { sessionStorage.setItem("linkReloadAt", String(Date.now())); } catch {}
-    location.reload();
-  }
-}
-
 const api = {
   async req(method, url, body) {
     const opts = { method, headers: { "X-Concall": "1" } };
     if (body instanceof FormData) opts.body = body;
     else if (body !== undefined) { opts.body = JSON.stringify(body); opts.headers["Content-Type"] = "application/json"; }
-    let r;
-    try { r = await fetch(url, opts); }
-    catch (e) {
-      if (viaLink()) { linkLost(); throw new Error(LINK_LOST); }
-      throw e;
-    }
-    if (r.status === 401 && (viaLink() || state.status?.remote)) { location.href = "/login"; throw new Error("Please sign in again"); }
+    const r = await fetch(url, opts);
     if (!r.ok) {
       let msg = r.statusText;
       try { msg = (await r.json()).detail || msg; } catch {}
@@ -118,9 +97,7 @@ async function renderLibrary() {
   const view = $("#view");
   let calls;
   try { calls = await api.get("/api/calls"); } catch (e) {
-    view.innerHTML = viaLink()
-      ? `<div class="empty"><h2>Can't reach your computer</h2><p>${esc(e.message)}</p><button class="btn primary" onclick="location.reload()">Try again</button></div>`
-      : `<div class="empty"><h2>Can't reach the app server</h2><p>${esc(e.message)}</p></div>`;
+    view.innerHTML = `<div class="empty"><h2>Can't reach the app server</h2><p>${esc(e.message)}</p></div>`;
     return;
   }
   state.calls = calls;
@@ -304,13 +281,12 @@ const Upload = {
       } else {
         let msg = xhr.statusText;
         try { msg = JSON.parse(xhr.responseText).detail || msg; } catch {}
-        if (xhr.status === 413) msg = "This file is too big to upload through the remote link (Cloudflare allows about 100 MB). Use an MP3/M4A, or add it on the computer running Concall Player.";
         err.textContent = typeof msg === "string" ? msg : "Upload failed";
         err.classList.remove("hidden");
         prog.classList.add("hidden");
       }
     };
-    xhr.onerror = () => { btn.disabled = false; err.textContent = viaLink() ? LINK_LOST : "Upload failed — is the app still running?"; err.classList.remove("hidden"); };
+    xhr.onerror = () => { btn.disabled = false; err.textContent = "Upload failed — is the app still running?"; err.classList.remove("hidden"); };
     xhr.send(fd);
   },
 };
@@ -1295,8 +1271,7 @@ document.addEventListener("keydown", (e) => {
 /* App-window helpers (the Mac app window can't do browser downloads)  */
 /* ------------------------------------------------------------------ */
 
-// In the app's own window (not a browser, and not the remote link from another computer).
-const inApp = () => !!state.status?.app_mode && !state.status?.remote;
+const inApp = () => !!state.status?.app_mode;
 
 function sidePanelHidden() {
   let saved = null;
@@ -1310,7 +1285,7 @@ async function copyText(text) {
 }
 
 async function saveFile(filename, text) {
-  if (state.status?.platform === "darwin" && !state.status?.remote) {
+  if (state.status?.platform === "darwin") {
     const r = await api.post("/api/export", { filename, text });
     toast(`Saved to Downloads: ${r.path.split("/").pop()}`, 4000);
     return;

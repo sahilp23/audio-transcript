@@ -2,7 +2,6 @@
 
 - [Mac](#mac)
 - [Windows](#windows)
-- [Use it from another computer (e.g. a locked-down office PC)](#use-it-from-another-computer)
 
 ## Mac
 
@@ -88,27 +87,3 @@ Afterwards, open it from the **Start menu** (type "Concall") or the desktop shor
 
 Your calls, notes and settings are stored in `%LOCALAPPDATA%\Concall Player`. Uninstalling the app (Settings → Apps) keeps them.
 
-
-## Use it from another computer
-
-If you can't install apps on a computer (e.g. your office PC), you can open Concall Player running on your Mac from that computer's web browser.
-
-**On the Mac (once):**
-1. Open **Settings** → **Use from other computers**.
-2. Enter your email address and choose a password (at least 8 characters), then **Save**.
-3. Click **Turn on**. After a few seconds a link like `https://some-random-words.trycloudflare.com` appears. Click **Email me the link** (or **Copy**).
-
-**On the other computer:**
-1. Open the link in the browser.
-2. Cloudflare asks for your email and emails you a code. Enter it. Cloudflare asks again about every 4 hours (its fixed rule); if a page you left open stops working, the app reloads it so you can enter a new code.
-3. Enter your Concall Player password. The browser remembers it for 30 days.
-
-**Good to know:**
-- The Mac must be **on, online, plugged in and with the lid open**, with Concall Player running. The app stops it from going to sleep while the link is on.
-- A new link can take **a minute or two** before it opens. If the browser says the site can't be found, wait a moment and reload.
-- **The link changes** whenever Concall Player or the Mac restarts (for example after an update). Get the new one from Settings, or with **Email me the link**.
-- It's light work for the Mac. Transcription runs in the cloud (Gladia/Groq) as usual.
-- Uploads through the link are limited to about 100 MB per file (use MP3/M4A recordings).
-- Settings, connections and updates can only be changed on the Mac itself.
-- The link uses Cloudflare's free "quick tunnel" service, which has no uptime guarantee. If it stops, the app reconnects on its own and shows the new link.
-- Some offices block such links. If the link doesn't open at all at work, that's the reason.

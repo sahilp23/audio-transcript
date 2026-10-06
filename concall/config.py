@@ -93,11 +93,6 @@ DEFAULTS = {
     "gladia_key": "",  # cloud transcription + speakers (free monthly hours); tried before Groq
     "gladia_paused_until": 0,  # free hours used up: skip Gladia until this time
     "mac_mode": "auto",  # auto | gentle | fast: how hard local processing may push the Mac
-    # Use from other computers (remote.py): Cloudflare link locked to this email + app password.
-    "remote_enabled": False,
-    "remote_email": "",
-    "remote_password": "",  # pbkdf2 hash
-    "remote_sessions": {},  # sha256(session token) -> expiry time
 }
 
 _lock = threading.Lock()
