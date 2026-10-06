@@ -43,7 +43,7 @@ def new_call_id(company: str, period: str) -> str:
 
 def read_json(path: Path, default: Any = None) -> Any:
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        return json.loads(config.read_text(path))
     except FileNotFoundError:
         return default
 

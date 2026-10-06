@@ -105,7 +105,7 @@ _lock = threading.Lock()
 
 def load_settings() -> dict:
     try:
-        data = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+        data = json.loads(read_text(SETTINGS_FILE))
     except (FileNotFoundError, ValueError):
         data = {}
     return {**DEFAULTS, **data}
@@ -122,6 +122,19 @@ def replace_file(tmp: Path, path: Path) -> None:
             if not IS_WINDOWS or attempt == 19:
                 raise
             time.sleep(0.05)
+
+
+def read_text(path: Path) -> str:
+    """Path.read_text that copes with Windows, where a file being replaced by another
+    thread can't be opened for a moment (PermissionError)."""
+    for attempt in range(20):
+        try:
+            return path.read_text(encoding="utf-8")
+        except PermissionError:
+            if not IS_WINDOWS or attempt == 19:
+                raise
+            time.sleep(0.05)
+    raise AssertionError("unreachable")
 
 
 def save_settings(patch: dict) -> dict:
