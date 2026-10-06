@@ -105,6 +105,7 @@ If you can't install apps on a computer (e.g. your office PC), you can open Conc
 
 **Good to know:**
 - The Mac must be **on, online, plugged in and with the lid open**, with Concall Player running. The app stops it from going to sleep while the link is on.
+- A new link can take **a minute or two** before it opens. If the browser says the site can't be found, wait a moment and reload.
 - **The link changes** whenever Concall Player or the Mac restarts (for example after an update). Get the new one from Settings, or with **Email me the link**.
 - It's light work for the Mac. Transcription runs in the cloud (Gladia/Groq) as usual.
 - Uploads through the link are limited to about 100 MB per file (use MP3/M4A recordings).

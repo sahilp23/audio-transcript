@@ -373,7 +373,7 @@ const Settings = {
     if (r.state === "on" && r.url) {
       body = `<div class="status-row"><span class="dot ok">✓</span><div class="grow"><div class="title">On. Your link:</div>
           <div class="token-row"><input id="remote-url" readonly value="${esc(r.url)}"><button class="btn small" id="remote-copy">Copy</button></div>
-          <div class="small muted">Open it on the other computer and sign in with <b>${esc(r.email)}</b> and your password.
+          <div class="small muted">Open it on the other computer and sign in with <b>${esc(r.email)}</b> and your password. A new link can take a minute or two before it opens.
           <b>The link changes</b> when Concall Player or this ${DEV()} restarts, so check here (or email it to yourself) after a restart.
           Keep this ${DEV()} plugged in with the lid open; it's kept awake while this is on.</div>
           <div class="row-actions"><button class="btn small" id="remote-mail">Email me the link</button>
