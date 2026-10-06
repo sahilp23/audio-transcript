@@ -1,7 +1,8 @@
 """Background processing: audio prep -> speech-to-text -> speakers -> transcript doc.
 
-Speech-to-text runs in the cloud (Groq) by default. If that isn't possible
-(not connected, offline, free limit reached) the call pauses with status
+Speech-to-text runs in the cloud by default: Gladia first (words and speakers
+in one go), then Groq (words only; speakers are then separated on the Mac). If
+neither is possible (not connected, offline, free limits reached) the call pauses with status
 "needs_input" and the app asks whether to use this Mac instead; the answer is
 stored as meta["asr_route"] ("local" or "local_gentle") and the job resumes.
 
@@ -11,10 +12,11 @@ official transcript later only re-runs the cheap alignment step.
 
 import queue
 import threading
+import time
 import traceback
 from pathlib import Path
 
-from . import asr, cloud, components, config, diarize, isolated, media, notify, store, structure
+from . import asr, cloud, gladia, components, config, diarize, isolated, media, notify, store, structure
 
 BROWSER_AUDIO = {".mp3", ".m4a", ".aac", ".mp4", ".wav", ".ogg", ".oga", ".webm", ".flac", ".opus"}
 
@@ -94,15 +96,9 @@ def process(call_id: str) -> None:
 
             route = meta.get("asr_route") or "cloud"
             if route == "cloud":
-                key = config.groq_key()
-                if not key:
-                    return ask_local(call_id, "Cloud transcription (Groq) isn't connected yet. Connect it in "
-                                              "Settings for fast transcription, or use this Mac.")
-                store.update_meta(call_id, stage="Transcribing in the cloud (Groq)", progress=0.05)
-                try:
-                    result = cloud.transcribe(str(audio), duration, prompt, key, on_progress)
-                except cloud.CloudUnavailable as exc:
-                    return ask_local(call_id, str(exc))
+                result, cloud_diar, service = _transcribe_in_cloud(call_id, audio, duration, prompt, on_progress, warnings)
+                if result is None:
+                    return
             else:
                 gentle = route == "local_gentle"
 
@@ -117,7 +113,11 @@ def process(call_id: str) -> None:
                     result = isolated.run("asr", str(wav), {"duration": duration, "prompt": prompt}, gentle, on_progress)
                 except Exception as exc:
                     raise RuntimeError(f"Speech-to-text on this Mac failed: {exc}") from exc
+                cloud_diar, service = None, "mac"
             store.write_json(asr_path, result)
+            if cloud_diar:
+                store.write_json(diar_path, cloud_diar)
+            store.update_meta(call_id, asr_service=service)
 
         # Speaker separation is only needed when there's no official transcript to name speakers.
         official = store.read_json(d / "official.json")
@@ -155,6 +155,46 @@ def process(call_id: str) -> None:
     notify.send(f"{meta['company']} {meta.get('period', '')} is ready", "Transcript ready")
 
 
+GLADIA_PAUSE = 24 * 3600  # after "free hours used up", skip Gladia for a day instead of re-uploading every call
+
+
+def _transcribe_in_cloud(call_id, audio, duration, prompt, on_progress, warnings):
+    """Gladia, then Groq. Returns (asr result, speaker segments or None, service), or
+    (None, None, None) after asking the user whether to use the Mac."""
+    problems = []
+    gkey = config.gladia_key()
+    paused = time.time() < float(config.load_settings().get("gladia_paused_until") or 0)
+    if gkey and paused:
+        problems.append("Gladia's free hours are used up for now.")
+    elif gkey:
+        store.update_meta(call_id, stage="Transcribing and separating speakers in the cloud (Gladia)", progress=0.05)
+        try:
+            out = gladia.transcribe(str(audio), duration, gkey, on_progress)
+            return out["asr"], out["diar"], "gladia"
+        except gladia.GladiaUnavailable as exc:
+            if gladia.is_quota(str(exc)):
+                config.save_settings({"gladia_paused_until": time.time() + GLADIA_PAUSE})
+            problems.append(str(exc))
+    key = config.groq_key()
+    if key:
+        store.update_meta(call_id, stage="Transcribing in the cloud (Groq)", progress=0.05)
+        try:
+            result = cloud.transcribe(str(audio), duration, prompt, key, on_progress)
+            if problems:
+                warnings.append(f"{problems[0]} Transcribed with Groq instead.")
+            return result, None, "groq"
+        except cloud.CloudUnavailable as exc:
+            problems.append(str(exc))
+    if not gkey and not key:
+        ask_local(call_id, "Cloud transcription isn't connected yet (Gladia or Groq). Connect one in "
+                           "Settings for fast transcription, or use this Mac.")
+    else:
+        if not key:
+            problems.append("Groq isn't connected as a backup.")
+        ask_local(call_id, " ".join(problems))
+    return None, None, None
+
+
 def ask_local(call_id: str, reason: str) -> None:
     """Pause the call and ask the user whether to transcribe on this Mac."""
     meta = store.update_meta(call_id, status="needs_input", stage="Waiting for your OK", decision={"reason": reason})
@@ -164,6 +204,8 @@ def ask_local(call_id: str, reason: str) -> None:
 def decide(call_id: str, choice: str) -> dict:
     if choice not in ("local", "local_gentle", "retry"):
         raise ValueError("choice must be local, local_gentle or retry")
+    if choice == "retry":
+        config.save_settings({"gladia_paused_until": 0})  # you asked to try the cloud again: include Gladia
     store.update_meta(call_id, asr_route=None if choice == "retry" else choice, decision=None)
     enqueue(call_id)
     return store.get_meta(call_id)

@@ -2,6 +2,11 @@
 
 Each `## <version>` section becomes the release notes shown in the app's update screen.
 
+## 0.4.0
+- **Speakers from the cloud (free):** connect a free Gladia account in Settings and each call is transcribed **and** split by speaker in the cloud, in a few minutes, without the slow speaker separation on your Mac. The free plan covers about 10 hours of audio a month.
+- When Gladia's free hours are used up (or it's unreachable), the app uses Groq automatically and tells you why; if that also fails, it asks before using your Mac, as before.
+- Each call shows which service transcribed it (Gladia, Groq or this Mac).
+
 ## 0.3.2
 - The transcript opens as soon as cloud transcription finishes (about a minute); speaker separation continues in the background and the speaker names appear when it's done.
 - Speaker separation shows real progress (it used to sit at 82% with no sign of life) and has a **Skip** button.

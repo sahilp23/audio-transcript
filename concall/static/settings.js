@@ -76,9 +76,15 @@ const Settings = {
         <a href="#/" class="back">← Your calls</a>
         <h1>Settings</h1>
 
+        <section class="card" id="gladia-card">
+          <h2>Transcription + speakers <span class="badge">cloud via Gladia · free 10 h/month</span></h2>
+          <p class="muted small">Tried first. Gladia transcribes the call <b>and</b> tells the speakers apart in one go, so the slow speaker separation on this Mac isn't needed. The free plan covers about 10 hours of audio a month (calls up to 2¼ hours each). The call audio is uploaded to Gladia for this. When the free hours run out, the app uses Groq below.</p>
+          <div id="gladia-body"></div>
+        </section>
+
         <section class="card" id="groq-card">
-          <h2>Transcription <span class="badge">cloud via Groq · free</span></h2>
-          <p class="muted small">Calls are transcribed on Groq's servers with the same Whisper model: a 1-hour call takes about a minute and your Mac stays free. The free plan covers roughly 8 hours of audio a day. The call audio is uploaded to Groq for this.</p>
+          <h2>Backup transcription <span class="badge">cloud via Groq · free</span></h2>
+          <p class="muted small">Used when Gladia isn't connected or its free hours are used up. Calls are transcribed on Groq's servers with the Whisper model: a 1-hour call takes about a minute and your Mac stays free. The free plan covers roughly 8 hours of audio a day. Groq gives words only, so speakers are then separated on this Mac (if set up below). The call audio is uploaded to Groq for this.</p>
           <div id="groq-body"></div>
         </section>
 
@@ -91,7 +97,7 @@ const Settings = {
 
         <section class="card" id="hf-card">
           <h2>Speaker separation <span class="badge">via Hugging Face · free</span></h2>
-          <p class="muted small">Lets the app tell speakers apart (management vs analysts) when the company transcript isn't out yet. It uses free models from Hugging Face, which need a one-time sign-up.</p>
+          <p class="muted small">Lets the app tell speakers apart (management vs analysts) when the company transcript isn't out yet. It uses free models from Hugging Face, which need a one-time sign-up. Not needed for calls transcribed by Gladia (it finds speakers itself); used when Groq or this Mac did the transcription. It's slow on 8 GB Macs.</p>
           <div id="hf-body"></div>
         </section>
 
@@ -133,6 +139,7 @@ const Settings = {
         (c.speech_model.repo ? this.statusRow(`Speech model <span class="muted small">(${esc(c.speech_model.repo.split("/").pop())}, about 1.6 GB)</span>`, c.speech_model, "speech_model") : "");
       $$("[data-retry]", sp).forEach((b) => (b.onclick = () => this.start(b.dataset.retry)));
     }
+    this.renderGladia();
     this.renderGroq();
     this.renderMacMode();
     const hf = $("#hf-body");
@@ -231,6 +238,49 @@ const Settings = {
       if (this.hfResult.ok) toast("All set. Setting up speaker separation…", 4000);
       this.refresh();
     });
+  },
+
+  renderGladia() {
+    const el = $("#gladia-body");
+    if (!el || el.contains(document.activeElement) || !this.setup.gladia) return;
+    const g = this.setup.gladia;
+    if (g.connected) {
+      el.innerHTML = `
+        <div class="status-row"><span class="dot ${g.paused ? "" : "ok"}">${g.paused ? "!" : "✓"}</span><div class="grow">
+          <div class="title">${g.paused ? "Connected, free hours used up" : "Connected"}</div>
+          <div class="small muted">Key ${esc(g.key_hint)}. ${g.paused
+            ? "Gladia's free hours ran out, so new calls use Groq for now. The app tries Gladia again after a day, or when you press “Try the cloud again” on a call."
+            : "New calls are transcribed and split by speaker in the cloud."}</div></div>
+          <button class="btn small ghost" id="gladia-disconnect">Disconnect</button></div>`;
+      $("#gladia-disconnect").onclick = async () => {
+        if (!confirm("Disconnect Gladia? New calls will use Groq (if connected) or ask before using this Mac.")) return;
+        await api.post("/api/gladia/disconnect"); this.refresh();
+      };
+      return;
+    }
+    el.innerHTML = `
+      <ol class="steps">
+        <li class="step"><span class="num">1</span><div class="grow"><div class="title">Create a free Gladia account</div>
+          <div class="small muted">Sign up with Google or email. No card needed for the free plan.</div><a class="btn small" href="${esc(g.signup_url)}">Open app.gladia.io</a></div></li>
+        <li class="step"><span class="num">2</span><div class="grow"><div class="title">Copy your API key</div>
+          <div class="small muted">In the Gladia dashboard, open <b>API keys</b> (left-hand menu), create or copy a key.</div></div></li>
+        <li class="step"><span class="num">3</span><div class="grow"><div class="title">Paste the key here</div>
+          <div class="token-row"><input id="gladia-key" type="password" placeholder="Gladia API key" autocomplete="off" spellcheck="false">
+          <button class="btn primary small" id="gladia-connect">Connect</button></div>
+          <div id="gladia-msg" class="small">${this.gladiaError ? `<span class="error">${esc(this.gladiaError)}</span>` : ""}</div></div></li>
+      </ol>`;
+    const connect = async () => {
+      $("#gladia-msg").innerHTML = `<span class="spinner"></span> Checking the key with Gladia…`;
+      try {
+        const r = await api.post("/api/gladia/connect", { key: $("#gladia-key").value.trim() });
+        this.gladiaError = r.ok ? "" : r.error;
+        if (r.ok) toast("Gladia connected. Calls waiting for transcription start now.", 4000);
+      } catch (e) { this.gladiaError = e.message; }
+      $("#gladia-key").blur();
+      this.refresh();
+    };
+    $("#gladia-connect").onclick = connect;
+    $("#gladia-key").addEventListener("keydown", (e) => { if (e.key === "Enter") connect(); });
   },
 
   renderGroq() {

@@ -5,6 +5,7 @@ import platform
 import shutil
 import subprocess
 import threading
+import time
 import webbrowser
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -15,7 +16,7 @@ from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import (__version__, asr, cloud, components, config, diarize, hf, isolated, media, pipeline, report, store,
+from . import (__version__, asr, cloud, components, config, diarize, gladia, hf, isolated, media, pipeline, report, store,
                summarize, transcript_parser, updater)
 
 STATIC = Path(__file__).parent / "static"
@@ -101,9 +102,13 @@ def status():
 @app.get("/api/setup")
 def setup_status():
     key = config.groq_key()
+    gkey = config.gladia_key()
     return {
         "components": components.status(),
         "hf": hf.status(),
+        "gladia": {"connected": bool(gkey), "key_hint": (gkey[:4] + "…" + gkey[-4:]) if gkey else "",
+                   "signup_url": gladia.SIGNUP_PAGE,
+                   "paused": time.time() < float(config.load_settings().get("gladia_paused_until") or 0)},
         "groq": {"connected": bool(key), "key_hint": (key[:4] + "…" + key[-4:]) if key else "",
                  "signup_url": cloud.SIGNUP_PAGE, "keys_url": cloud.KEYS_PAGE},
         "mac": {"ram_gb": round(config.total_ram_gb()), "gentle": config.gentle_mode(),
@@ -122,6 +127,24 @@ def groq_connect(body: dict):
             if meta.get("status") == "needs_input" and not meta.get("asr_route"):
                 pipeline.decide(meta["id"], "retry")
     return result
+
+
+@app.post("/api/gladia/connect")
+def gladia_connect(body: dict):
+    key = str(body.get("key") or "").strip()
+    result = gladia.check_key(key)
+    if result["ok"]:
+        config.save_settings({"gladia_key": key, "gladia_paused_until": 0})
+        for meta in store.list_calls():
+            if meta.get("status") == "needs_input" and not meta.get("asr_route"):
+                pipeline.decide(meta["id"], "retry")
+    return result
+
+
+@app.post("/api/gladia/disconnect")
+def gladia_disconnect():
+    config.save_settings({"gladia_key": "", "gladia_paused_until": 0})
+    return {"ok": True}
 
 
 @app.post("/api/groq/disconnect")
@@ -164,6 +187,7 @@ def get_settings():
     s = config.load_settings()
     s.pop("hf_token", None)
     s.pop("groq_key", None)
+    s.pop("gladia_key", None)
     return s
 
 
@@ -175,6 +199,7 @@ def patch_settings(body: dict):
     s = config.save_settings(allowed)
     s.pop("hf_token", None)
     s.pop("groq_key", None)
+    s.pop("gladia_key", None)
     return s
 
 
@@ -195,7 +220,7 @@ def update_restart():
     return {"ok": True}
 
 
-OPEN_HOSTS = {"huggingface.co", "ollama.com", "github.com", "brew.sh", "groq.com"}
+OPEN_HOSTS = {"huggingface.co", "ollama.com", "github.com", "brew.sh", "groq.com", "gladia.io"}
 
 
 def _open(target: str) -> None:

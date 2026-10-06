@@ -577,3 +577,192 @@ def test_diarization_progress_hook(monkeypatch):
     assert segs == [{"s": 0.0, "e": 1.0, "spk": "SPEAKER_00"}]
     assert pipe.embedding_batch_size == 32
     assert seen == sorted(seen) and seen[-1] == 1.0 and 0.1 < seen[0] < 0.2
+
+
+# ---------- Gladia (cloud transcription + speakers), with mocked HTTP ----------
+
+GLADIA_RESULT = {
+    "metadata": {"audio_duration": 8.0},
+    "transcription": {"utterances": [
+        {"start": 0.2, "end": 2.0, "speaker": 0, "text": "Good evening, everyone.", "channel": 0, "confidence": 0.9,
+         "words": [{"word": " Good", "start": 0.2, "end": 0.5, "confidence": 0.9},
+                   {"word": " evening", "start": 0.5, "end": 1.0, "confidence": 0.9},
+                   {"word": " everyone", "start": 1.1, "end": 2.0, "confidence": 0.9}]},
+        {"start": 2.5, "end": 4.0, "speaker": 1, "text": "Revenue grew 18%.", "channel": 0, "confidence": 0.9,
+         "words": [{"word": "Revenue", "start": 2.5, "end": 3.0, "confidence": 0.9},
+                   {"word": "grew", "start": 3.0, "end": 3.4, "confidence": 0.9},
+                   {"word": "18%.", "start": 3.4, "end": 4.0, "confidence": 0.9}]},
+    ]},
+}
+
+
+class _FakeResponse(io.BytesIO):
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        self.close()
+
+
+def _http_error(url, code, body):
+    import json
+    import urllib.error
+
+    return urllib.error.HTTPError(url, code, "err", {}, io.BytesIO(json.dumps(body).encode()))
+
+
+def test_gladia_parse_result_words_and_speakers():
+    from concall import gladia
+
+    words, diar = gladia.parse_result(GLADIA_RESULT)
+    assert [w["w"] for w in words] == ["Good", "evening,", "everyone.", "Revenue", "grew", "18%."]
+    assert words[1]["s"] == 0.5 and words[3]["s"] == 2.5
+    assert diar == [{"s": 0.2, "e": 2.0, "spk": "SPEAKER_00"}, {"s": 2.5, "e": 4.0, "spk": "SPEAKER_01"}]
+
+
+def test_gladia_transcribe_flow(tmp_path, monkeypatch):
+    import json
+
+    from concall import gladia
+
+    audio = tmp_path / "a.mp3"
+    audio.write_bytes(_wav_bytes(3))
+    monkeypatch.setattr(gladia, "POLL_EVERY", 0)
+    seen = []
+    polls = iter(["queued", "processing", "done"])
+
+    def fake_request(method, url, key, body=None, headers=None, timeout=60):
+        seen.append((method, url.replace(gladia.API, ""), key, (headers or {}).get("Content-Type", "")))
+        if url.endswith("/v2/upload"):
+            assert b'name="audio"' in body
+            return _FakeResponse(json.dumps({"audio_url": "https://api.gladia.io/file/1"}).encode())
+        if method == "POST":
+            req = json.loads(body)
+            assert req["diarization"] is True and req["audio_url"].endswith("/file/1")
+            return _FakeResponse(json.dumps({"id": "job1", "result_url": "x"}).encode())
+        status = next(polls)
+        return _FakeResponse(json.dumps({"id": "job1", "status": status,
+                                         "result": GLADIA_RESULT if status == "done" else None}).encode())
+
+    monkeypatch.setattr(gladia, "_request", fake_request)
+    progress = []
+    out = gladia.transcribe(str(audio), 3.0, "k" * 36, progress.append)
+    assert [s[:2] for s in seen] == [("POST", "/v2/upload"), ("POST", "/v2/pre-recorded")] + [("GET", "/v2/pre-recorded/job1")] * 3
+    assert seen[0][3].startswith("multipart/form-data") and all(s[2] == "k" * 36 for s in seen)
+    assert out["asr"]["engine"] == "gladia" and len(out["asr"]["words"]) == 6
+    assert len(out["diar"]) == 2 and progress[-1] == 1.0
+
+
+def test_gladia_sends_key_and_user_agent(monkeypatch):
+    import urllib.request
+
+    from concall import gladia
+
+    captured = {}
+
+    def fake_urlopen(req, timeout=0):
+        captured.update({k.lower(): v for k, v in req.header_items()})
+        return _FakeResponse(b"{}")
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    assert gladia.check_key("k" * 36) == {"ok": True}
+    assert captured["x-gladia-key"] == "k" * 36
+    assert captured["user-agent"].startswith("ConcallPlayer/")
+
+
+def test_gladia_errors_are_explained(tmp_path, monkeypatch):
+    from concall import gladia
+
+    assert not gladia.check_key("")["ok"]
+    assert "doesn't look like" in gladia.check_key("short")["error"]
+
+    def bad_key(method, url, key, body=None, headers=None, timeout=60):
+        raise _http_error(url, 401, {"message": "Invalid API key"})
+
+    monkeypatch.setattr(gladia, "_request", bad_key)
+    assert "rejected this key" in gladia.check_key("k" * 36)["error"]
+
+    def out_of_hours(method, url, key, body=None, headers=None, timeout=60):
+        raise _http_error(url, 402, {"message": "Monthly quota exceeded"})
+
+    monkeypatch.setattr(gladia, "_request", out_of_hours)
+    audio = tmp_path / "a.mp3"
+    audio.write_bytes(_wav_bytes(2))
+    with pytest.raises(gladia.GladiaUnavailable) as e:
+        gladia.transcribe(str(audio), 2.0, "k" * 36, lambda p: None)
+    assert gladia.is_quota(str(e.value)) and "free hours" in str(e.value)
+
+    with pytest.raises(gladia.GladiaUnavailable, match="135-minute"):
+        gladia.transcribe(str(audio), 3 * 3600, "k" * 36, lambda p: None)
+
+
+def test_gladia_route_gives_speakers_and_service(client, monkeypatch):
+    from concall import config, gladia
+
+    config.save_settings({"gladia_key": "k" * 36})
+    fake, diar, _ = make_asr()
+    monkeypatch.setattr(gladia, "transcribe", lambda audio, dur, key, progress: (
+        progress(1.0), {"asr": {"engine": "gladia", "model": "gladia", "words": fake["words"]}, "diar": diar})[1])
+    r = client.post("/api/calls", data={"company": "Demo", "period": "Q1"},
+                    files={"audio": ("call.mp3", io.BytesIO(_wav_bytes()), "audio/mpeg")})
+    meta = _wait_ready(client, r.json()["id"])
+    assert meta["status"] == "ready", meta
+    assert meta["asr_service"] == "gladia"
+    doc = client.get(f"/api/calls/{meta['id']}/doc").json()
+    assert doc["speakers_separated"] is True
+    setup = client.get("/api/setup").json()
+    assert setup["gladia"]["connected"] and "k" * 36 not in str(setup)
+    assert "gladia_key" not in client.get("/api/settings").json()
+
+
+def test_gladia_out_of_hours_falls_back_to_groq(client, monkeypatch):
+    from concall import cloud, config, gladia
+
+    config.save_settings({"gladia_key": "k" * 36, "groq_key": "gsk_test"})
+    fake, _d, _ = make_asr()
+    gladia_calls = []
+
+    def fake_gladia(audio, dur, key, progress):
+        gladia_calls.append(1)
+        raise gladia.GladiaUnavailable(gladia.quota_message(402, ""))
+
+    monkeypatch.setattr(gladia, "transcribe", fake_gladia)
+    monkeypatch.setattr(cloud, "transcribe", lambda audio, dur, prompt, key, progress: (
+        progress(1.0), {"engine": "groq", "model": cloud.MODEL, "words": fake["words"]})[1])
+
+    for period in ("Q1", "Q2"):
+        r = client.post("/api/calls", data={"company": "Demo", "period": period},
+                        files={"audio": ("call.mp3", io.BytesIO(_wav_bytes()), "audio/mpeg")})
+        meta = _wait_ready(client, r.json()["id"])
+        assert meta["status"] == "ready", meta
+        assert meta["asr_service"] == "groq"
+    # The first call told you why; the second didn't re-upload to Gladia.
+    assert gladia_calls == [1]
+    assert client.get("/api/setup").json()["gladia"]["paused"] is True
+
+
+def test_gladia_and_groq_both_failing_asks_first(client, monkeypatch):
+    from concall import cloud, config, gladia
+
+    config.save_settings({"gladia_key": "k" * 36, "groq_key": "gsk_test"})
+
+    def no_gladia(*a):
+        raise gladia.GladiaUnavailable("Couldn't reach Gladia (no internet?): x")
+
+    def no_groq(*a):
+        raise cloud.CloudUnavailable("Couldn't reach Groq (no internet?): x")
+
+    monkeypatch.setattr(gladia, "transcribe", no_gladia)
+    monkeypatch.setattr(cloud, "transcribe", no_groq)
+    r = client.post("/api/calls", data={"company": "Demo", "period": "Q1"},
+                    files={"audio": ("call.mp3", io.BytesIO(_wav_bytes()), "audio/mpeg")})
+    meta = _wait_ready(client, r.json()["id"])
+    assert meta["status"] == "needs_input"
+    assert "Gladia" in meta["decision"]["reason"] and "Groq" in meta["decision"]["reason"]
+
+
+def test_report_hides_gladia_key(client):
+    from concall import config, report
+
+    config.save_settings({"gladia_key": "abcd1234-secret-key-value-0000"})
+    assert "secret" not in report.redact("key=abcd1234-secret-key-value-0000")

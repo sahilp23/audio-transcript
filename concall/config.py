@@ -76,6 +76,8 @@ DEFAULTS = {
     "auto_update_check": True,
     "ollama_model": "llama3.2:3b",
     "groq_key": "",  # cloud transcription (free tier); empty = not connected
+    "gladia_key": "",  # cloud transcription + speakers (free monthly hours); tried before Groq
+    "gladia_paused_until": 0,  # free hours used up: skip Gladia until this time
     "mac_mode": "auto",  # auto | gentle | fast: how hard local processing may push the Mac
 }
 
@@ -97,7 +99,7 @@ def save_settings(patch: dict) -> dict:
         SUPPORT_DIR.mkdir(parents=True, exist_ok=True)
         tmp = SETTINGS_FILE.with_suffix(".tmp")
         tmp.write_text(json.dumps(data, indent=2))
-        os.chmod(tmp, 0o600)  # holds the Hugging Face token
+        os.chmod(tmp, 0o600)  # holds the Hugging Face token and API keys
         os.replace(tmp, SETTINGS_FILE)
         return data
 
@@ -122,6 +124,10 @@ def diarization_enabled() -> bool:
 
 def groq_key() -> str:
     return os.environ.get("GROQ_API_KEY") or load_settings()["groq_key"]
+
+
+def gladia_key() -> str:
+    return os.environ.get("GLADIA_API_KEY") or load_settings()["gladia_key"]
 
 
 def total_ram_gb() -> float:

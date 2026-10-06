@@ -42,7 +42,8 @@ audio ──ffmpeg──▶ 16 kHz wav ──Whisper (mlx, Apple GPU)──▶ w
 company transcript (PDF/text) ──parser──▶ speaker turns ──aligner───────────┴─▶ doc.json ──▶ player
 ```
 
-- **Speech-to-text:** [mlx-whisper](https://github.com/ml-explore/mlx-examples/tree/main/whisper) on Apple Silicon. On other machines it uses [faster-whisper](https://github.com/SYSTRAN/faster-whisper) on the CPU. The model gets a short vocabulary hint (company name, EBITDA, crores, FY27…) so finance terms are spelled correctly.
+- **Cloud first:** if connected in Settings, calls go to [Gladia](https://www.gladia.io) (words + speakers in one go, free 10 h/month), then to [Groq](https://groq.com) (words only) when Gladia's free hours are used up. If neither works, the app asks before using the Mac. Each call shows which service transcribed it.
+- **Speech-to-text on the Mac:** [mlx-whisper](https://github.com/ml-explore/mlx-examples/tree/main/whisper) on Apple Silicon. On other machines it uses [faster-whisper](https://github.com/SYSTRAN/faster-whisper) on the CPU. The model gets a short vocabulary hint (company name, EBITDA, crores, FY27…) so finance terms are spelled correctly.
 - **Lining up the official transcript with the audio:** company transcripts are edited, with fillers removed and grammar fixed, so they never match the audio word for word. The aligner matches the official words to the speech-to-text words. Matched words take the exact audio timing. Words that don't match get timings spread evenly between their matched neighbours. The sidebar shows the result as "N% synced". Aligning a one-hour call takes about 0.1 s, so attaching a transcript is quick.
 - **Storage:** each call is a folder in `calls/`, inside `~/Library/Application Support/Concall Player` for the app or `./data` when running from source. It holds the audio and JSON files. Bookmarks, notes and speaker names are kept in `user.json` in the call's folder. Re-processing a call doesn't touch them.
 
@@ -64,7 +65,8 @@ Speaker roles are read from the participants list on the first page. Page header
 |---|---|
 | `concall/server.py` | Local web server (FastAPI): all `/api/...` endpoints |
 | `concall/pipeline.py` | Background job: audio → speech-to-text → speakers → transcript |
-| `concall/cloud.py` | Groq cloud transcription (chunked upload, word timings) |
+| `concall/gladia.py` | Gladia cloud transcription + speaker separation (tried first) |
+| `concall/cloud.py` | Groq cloud transcription (chunked upload, word timings; backup when Gladia can't) |
 | `concall/asr.py`, `diarize.py` | On-Mac Whisper (mlx / faster-whisper) and pyannote wrappers |
 | `concall/isolated.py` | Runs heavy model work in a separate low-priority process |
 | `concall/report.py` | "Report a problem": redacted GitHub issue links |
@@ -85,7 +87,7 @@ Speaker roles are read from the participants list on the first page. Page header
 2. Bump `__version__` in `concall/__init__.py` and add a `## <version>` section to `CHANGELOG.md`. That section becomes the "what's new" text in the app.
 3. Merge to `main`. CI publishes release `v<version>` with the `.dmg`. Installed apps offer it as a one-click update. Changed dependencies in the `requirements*.txt` files are installed automatically on the next launch.
 
-Optional repository secrets for fuller CI coverage (Settings → Secrets and variables → Actions): `GROQ_API_KEY` tests cloud transcription, and `HF_TOKEN` tests real speaker separation. Without them, those two checks are skipped.
+Optional repository secrets for fuller CI coverage (Settings → Secrets and variables → Actions): `GROQ_API_KEY` tests Groq cloud transcription, `GLADIA_API_KEY` tests Gladia transcription + speakers, and `HF_TOKEN` tests real speaker separation on the Mac. Without them, those checks are skipped.
 
 Changes to the launcher (`packaging/macos/launcher.sh`) or `Info.plist` only reach people who download the new `.dmg`. Everything else updates in place.
 
@@ -94,6 +96,7 @@ Changes to the launcher (`packaging/macos/launcher.sh`) or `Info.plist` only rea
 | Variable | Default | |
 |---|---|---|
 | `HF_TOKEN` | – | Hugging Face token (the app stores it in Settings instead) |
+| `GLADIA_API_KEY`, `GROQ_API_KEY` | – | Cloud transcription keys (the app stores them in Settings instead) |
 | `MLX_MODEL` | `mlx-community/whisper-large-v3-turbo` | Speech model on Apple Silicon |
 | `ASR_ENGINE` | `auto` | `mlx`, `faster`, or `auto` |
 | `CONCALL_SUPPORT_DIR` | `./data` (app: `~/Library/Application Support/Concall Player`) | Where calls and settings are stored |

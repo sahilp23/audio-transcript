@@ -20,6 +20,10 @@ MAX_BODY = 5500  # characters; GitHub's new-issue links stop working when the UR
 def redact(text: str) -> str:
     text = re.sub(r"hf_[A-Za-z0-9]{6,}", "hf_***", text)
     text = re.sub(r"gsk_[A-Za-z0-9]{6,}", "gsk_***", text)
+    # Gladia keys have no recognisable prefix: mask the connected key itself.
+    gkey = config.gladia_key()
+    if gkey:
+        text = text.replace(gkey, "<gladia key>")
     home = str(Path.home())
     if home and home != "/":
         text = text.replace(home, "~")
@@ -41,7 +45,8 @@ def _environment() -> str:
     rows = [
         f"- App version: {__version__} ({'Mac app' if config.APP_MODE else 'from source'})",
         f"- macOS: {mac}, {platform.machine()}, {config.total_ram_gb():.0f} GB RAM",
-        f"- Cloud transcription (Groq): {'connected' if config.groq_key() else 'not connected'}",
+        f"- Cloud transcription: Gladia {'connected' if config.gladia_key() else 'not connected'}, "
+        f"Groq {'connected' if config.groq_key() else 'not connected'}",
         f"- Mac mode: {settings['mac_mode']} (gentle={config.gentle_mode()})",
         f"- Speaker separation: {diarize.available() or 'ready'}",
         "- Components: " + ", ".join(

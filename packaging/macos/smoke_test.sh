@@ -107,7 +107,7 @@ print("pyannote model loaded:", type(m).__name__)
 PY
 echo "✓ speaker model loads"
 
-# 6. Optional, only when the repository has these secrets: Groq cloud and full speaker separation.
+# 6. Optional, only when the repository has these secrets: Groq, Gladia and full speaker separation.
 if [ -n "${CI_GROQ_KEY:-}" ]; then
   curl -sf -X POST "${H[@]}" -H "Content-Type: application/json" -d "{\"key\": \"$CI_GROQ_KEY\"}" "$BASE/api/groq/connect" | json "d['ok']" | grep -q True
   ID3=$(upload "Q3")
@@ -117,6 +117,20 @@ if [ -n "${CI_GROQ_KEY:-}" ]; then
   echo "✓ Groq cloud transcription works"
 else
   echo "- skipped Groq test (no CI_GROQ_KEY secret)"
+fi
+if [ -n "${CI_GLADIA_KEY:-}" ]; then
+  # Gladia is tried before Groq once connected: transcript and speakers in one go.
+  curl -sf -X POST "${H[@]}" -H "Content-Type: application/json" -d "{\"key\": \"$CI_GLADIA_KEY\"}" "$BASE/api/gladia/connect" | json "d['ok']" | grep -q True
+  ID4=$(upload "Q4")
+  wait_status "$ID4" "ready" 600 >/dev/null
+  curl -sf "$BASE/api/calls/$ID4" | json "d.get('asr_service'), d.get('warnings')" | tee /dev/stderr | grep -q "gladia"
+  TEXT=$(text_of "$ID4"); echo "Gladia: $TEXT"
+  echo "$TEXT" | grep -iq "revenue"
+  curl -sf "$BASE/api/calls/$ID4/doc" | json "d['speakers_separated']" | grep -q True
+  curl -sf -X POST "${H[@]}" "$BASE/api/gladia/disconnect" >/dev/null
+  echo "✓ Gladia cloud transcription + speakers works"
+else
+  echo "- skipped Gladia test (no CI_GLADIA_KEY secret)"
 fi
 if [ -n "${CI_HF_TOKEN:-}" ]; then
   curl -sf -X POST "${H[@]}" -H "Content-Type: application/json" -d "{\"token\": \"$CI_HF_TOKEN\"}" "$BASE/api/hf/connect" | json "d['ok']" | grep -q True

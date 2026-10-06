@@ -171,7 +171,7 @@ function decisionHtml(meta) {
       </div>
       <p class="muted small"><b>Gentle</b> runs in the background on the Mac's efficiency cores, so the Mac stays usable, but a 1-hour call can take an hour or more.
       <b>Fast</b> uses the Mac's graphics chip: quicker, but the Mac may lag while it runs${gentleDefault ? " (likely on an 8 GB Mac)" : ""}.
-      <br>Or <a href="#/settings">connect / check Groq in Settings</a>; waiting calls start automatically once it's connected.</p>
+      <br>Or <a href="#/settings">connect / check Gladia or Groq in Settings</a>; waiting calls start automatically once it's connected.</p>
     </div>`;
 }
 
@@ -599,6 +599,8 @@ const Player = {
       b.push(`<span class="badge warn">Auto transcript</span>`);
       b.push(`<span class="badge">${d.speakers_separated ? "Speakers detected" : "Speakers not separated"}</span>`);
     }
+    const via = { gladia: "Gladia (cloud)", groq: "Groq (cloud)", mac: "this Mac" }[m.asr_service];
+    if (via) b.push(`<span class="badge" title="Which service transcribed this call">Transcribed by ${via}</span>`);
     if (m.duration) b.push(`<span class="badge">${fmtTime(m.duration)}</span>`);
     return b.join("");
   },
