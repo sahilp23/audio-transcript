@@ -141,10 +141,13 @@ remote_on() { curl -sf "$BASE/api/remote" | json "d['state']" | grep -q "^on$"; 
 if wait_for 180 "Cloudflare link created" remote_on; then
   LINK=$(curl -sf "$BASE/api/remote" | json "d['url']"); echo "Link: $LINK"
   LOCKED=""
-  for _ in $(seq 1 30); do  # a new link can take a few seconds to start working
-    WHERE=$(curl -s -o /dev/null -w "%{http_code} %{redirect_url}" "$LINK/" || true)
-    if echo "$WHERE" | grep -q "^302 https://login.trycloudflare.com"; then LOCKED=1; break; fi
-    sleep 2
+  # A brand-new link takes a little while to resolve. Ask Cloudflare's DNS directly (the
+  # system resolver may have cached "doesn't exist yet"), and fall back to the system one.
+  for i in $(seq 1 60); do
+    if [ $((i % 2)) -eq 1 ]; then DNS=(--doh-url https://1.1.1.1/dns-query); else DNS=(); fi
+    WHERE=$(curl -sS -o /dev/null --max-time 15 "${DNS[@]}" -w "%{http_code} %{redirect_url}" "$LINK/" 2>&1 || true)
+    if echo "$WHERE" | grep -q "302 https://login.trycloudflare.com"; then LOCKED=1; break; fi
+    sleep 3
   done
   echo "Unauthenticated visit: $WHERE"
   [ -n "$LOCKED" ] || { echo "✗ the link isn't behind Cloudflare's email sign-in"; exit 1; }
