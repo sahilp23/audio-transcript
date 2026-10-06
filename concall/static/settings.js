@@ -78,18 +78,18 @@ const Settings = {
 
         <section class="card" id="gladia-card">
           <h2>Transcription + speakers <span class="badge">cloud via Gladia · free 10 h/month</span></h2>
-          <p class="muted small">Tried first. Gladia transcribes the call <b>and</b> tells the speakers apart in one go, so the slow speaker separation on this Mac isn't needed. The free plan covers about 10 hours of audio a month (calls up to 2¼ hours each). The call audio is uploaded to Gladia for this. When the free hours run out, the app uses Groq below.</p>
+          <p class="muted small">Tried first. Gladia transcribes the call <b>and</b> tells the speakers apart in one go, so the slow speaker separation on this ${DEV()} isn't needed. The free plan covers about 10 hours of audio a month (calls up to 2¼ hours each). The call audio is uploaded to Gladia for this. When the free hours run out, the app uses Groq below.</p>
           <div id="gladia-body"></div>
         </section>
 
         <section class="card" id="groq-card">
           <h2>Backup transcription <span class="badge">cloud via Groq · free</span></h2>
-          <p class="muted small">Used when Gladia isn't connected or its free hours are used up. Calls are transcribed on Groq's servers with the Whisper model: a 1-hour call takes about a minute and your Mac stays free. The free plan covers roughly 8 hours of audio a day. Groq gives words only, so speakers are then separated on this Mac (if set up below). The call audio is uploaded to Groq for this.</p>
+          <p class="muted small">Used when Gladia isn't connected or its free hours are used up. Calls are transcribed on Groq's servers with the Whisper model: a 1-hour call takes about a minute and your ${DEV()} stays free. The free plan covers roughly 8 hours of audio a day. Groq gives words only, so speakers are then separated on this ${DEV()} (if set up below). The call audio is uploaded to Groq for this.</p>
           <div id="groq-body"></div>
         </section>
 
         <section class="card">
-          <h2>On this Mac</h2>
+          <h2>On this ${DEV()}</h2>
           <p class="muted small">Used when the cloud isn't available (you're asked first), and for speaker separation.</p>
           <div id="setup-speech"></div>
           <div id="mac-mode"></div>
@@ -97,7 +97,7 @@ const Settings = {
 
         <section class="card" id="hf-card">
           <h2>Speaker separation <span class="badge">via Hugging Face · free</span></h2>
-          <p class="muted small">Lets the app tell speakers apart (management vs analysts) when the company transcript isn't out yet. It uses free models from Hugging Face, which need a one-time sign-up. Not needed for calls transcribed by Gladia (it finds speakers itself); used when Groq or this Mac did the transcription. It's slow on 8 GB Macs.</p>
+          <p class="muted small">Lets the app tell speakers apart (management vs analysts) when the company transcript isn't out yet. It uses free models from Hugging Face, which need a one-time sign-up. Not needed for calls transcribed by Gladia (it finds speakers itself); used when Groq or this ${DEV()} did the transcription. It's slow on computers with 8 GB of memory.</p>
           <div id="hf-body"></div>
         </section>
 
@@ -114,9 +114,9 @@ const Settings = {
 
         <section class="card">
           <h2>Your data</h2>
-          <p class="small">Calls, transcripts, bookmarks and notes are stored only on this Mac:<br><code>${esc(st.data_dir || "")}</code></p>
+          <p class="small">Calls, transcripts, bookmarks and notes are stored only on this ${DEV()}:<br><code>${esc(st.data_dir || "")}</code></p>
           <div class="row-actions">
-            <button class="btn small" id="reveal-data">Show in Finder</button>
+            <button class="btn small" id="reveal-data">${IS_WIN() ? "Open folder" : "Show in Finder"}</button>
             ${st.app_mode ? `<button class="btn small ghost" id="reveal-logs">Open log files</button>` : ""}
             <button class="btn small ghost" data-report="">Report a problem</button>
           </div>
@@ -253,7 +253,7 @@ const Settings = {
             : "New calls are transcribed and split by speaker in the cloud."}</div></div>
           <button class="btn small ghost" id="gladia-disconnect">Disconnect</button></div>`;
       $("#gladia-disconnect").onclick = async () => {
-        if (!confirm("Disconnect Gladia? New calls will use Groq (if connected) or ask before using this Mac.")) return;
+        if (!confirm(`Disconnect Gladia? New calls will use Groq (if connected) or ask before using this ${DEV()}.`)) return;
         await api.post("/api/gladia/disconnect"); this.refresh();
       };
       return;
@@ -293,7 +293,7 @@ const Settings = {
           <div class="title">Connected</div><div class="small muted">Key ${esc(g.key_hint)}. New calls are transcribed in the cloud.</div></div>
           <button class="btn small ghost" id="groq-disconnect">Disconnect</button></div>`;
       $("#groq-disconnect").onclick = async () => {
-        if (!confirm("Disconnect Groq? New calls will ask before transcribing on this Mac.")) return;
+        if (!confirm(`Disconnect Groq? New calls will ask before transcribing on this ${DEV()}.`)) return;
         await api.post("/api/groq/disconnect"); this.refresh();
       };
       return;
@@ -330,9 +330,9 @@ const Settings = {
     const opt = (v, label, desc) => `<label class="radio"><input type="radio" name="mac-mode" value="${v}" ${m.mode === v ? "checked" : ""}>
       <span><b>${label}</b><br><span class="small muted">${desc}</span></span></label>`;
     el.innerHTML = `<div class="mode-box"><div class="title">How hard may it work?</div>
-      ${opt("auto", `Automatic (${m.gentle ? "gentle" : "fast"} on this Mac)`, `Gentle on Macs with 8 GB of memory, fast otherwise. This Mac has about ${m.ram_gb} GB.`)}
-      ${opt("gentle", "Gentle", "Background priority on the efficiency cores: the Mac stays usable, processing takes longer.")}
-      ${opt("fast", "Fast", "Uses the graphics chip and all cores: quicker, but the Mac may lag meanwhile.")}</div>`;
+      ${opt("auto", `Automatic (${m.gentle ? "gentle" : "fast"} on this ${DEV()})`, `Gentle on computers with 8 GB of memory or less, fast otherwise. This ${DEV()} has about ${m.ram_gb} GB.`)}
+      ${opt("gentle", "Gentle", `Background priority on a few cores: the ${DEV()} stays usable, processing takes longer.`)}
+      ${opt("fast", "Fast", IS_WIN() ? "Uses all processor cores: quicker, but the PC may lag meanwhile." : "Uses the graphics chip and all cores: quicker, but the Mac may lag meanwhile.")}</div>`;
     $$("input[name=mac-mode]", el).forEach((r) => (r.onchange = async () => {
       await api.patch("/api/settings", { mac_mode: r.value }); this.refresh();
     }));
@@ -348,7 +348,7 @@ const Settings = {
     if (ol.running && ol.model_available) {
       return `<div class="status-row"><span class="dot ok">✓</span><div class="grow"><div class="title">Ollama is running</div><div class="small muted">Model ${esc(ol.model)}. Open a call → Summary tab → Generate summary.</div></div></div>`;
     }
-    return `<p class="small">Summaries are made by a free AI model that runs on your Mac through <a href="https://ollama.com">Ollama</a>.</p>
+    return `<p class="small">Summaries are made by a free AI model that runs on your ${DEV()} through <a href="https://ollama.com">Ollama</a>.</p>
       <ol class="small plain">
         <li>Download and install Ollama from <a href="https://ollama.com/download">ollama.com/download</a> and open it.</li>
         <li>Open the <b>Terminal</b> app, paste <code>ollama pull ${esc(ol.model || "llama3.2:3b")}</code> and press Return (a ~2 GB download).</li>

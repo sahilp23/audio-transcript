@@ -47,7 +47,11 @@ def run(kind: str, input_path: str, opts: dict, gentle: bool,
         out = Path(tmp) / "result.json"
         cmd = [sys.executable, "-m", "concall.isolated", kind, input_path, str(out), json.dumps({**opts, "gentle": gentle})]
         env = {**os.environ, "PYTHONPATH": os.pathsep.join(filter(None, [str(ROOT), os.environ.get("PYTHONPATH")]))}
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, env=env)
+        flags = 0
+        if config.IS_WINDOWS and gentle:
+            flags = subprocess.BELOW_NORMAL_PRIORITY_CLASS  # Windows' version of `nice`
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, env=env,
+                                encoding="utf-8", errors="replace", creationflags=flags)
         if tag:
             _running[tag] = proc
         if config.IS_MAC and shutil.which("caffeinate"):
@@ -74,15 +78,23 @@ def run(kind: str, input_path: str, opts: dict, gentle: bool,
         if code != 0:
             last = next((t for t in reversed(tail) if "Error" in t or "error" in t), tail[-1] if tail else "unknown error")
             raise RuntimeError(last)
-        return json.loads(out.read_text())
+        return json.loads(out.read_text(encoding="utf-8"))
 
 
 def _child(kind: str, input_path: str, out: str, opts: dict) -> None:
     gentle = opts.get("gentle")
-    if gentle:
+    if gentle and hasattr(os, "nice"):
         try:
             os.nice(10)
         except OSError:
+            pass
+    if config.IS_WINDOWS:
+        # Don't let Windows go to sleep halfway through a long job (ES_CONTINUOUS | ES_SYSTEM_REQUIRED).
+        try:
+            import ctypes
+
+            ctypes.windll.kernel32.SetThreadExecutionState(0x80000000 | 0x00000001)
+        except Exception:
             pass
 
     def progress(p: float) -> None:
@@ -111,7 +123,7 @@ def _child(kind: str, input_path: str, out: str, opts: dict) -> None:
         result = diarize.diarize(input_path, gentle=bool(gentle), progress=progress)
     else:
         raise SystemExit(f"unknown job {kind}")
-    Path(out).write_text(json.dumps(result))
+    Path(out).write_text(json.dumps(result), encoding="utf-8")
 
 
 if __name__ == "__main__":

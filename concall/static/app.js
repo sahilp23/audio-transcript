@@ -1,6 +1,10 @@
 /* Concall Player — single-page app, no build step. */
 "use strict";
 
+/* "Mac" or "PC" in messages, depending on where the app runs. */
+const IS_WIN = () => state?.status?.platform === "windows";
+const DEV = () => (IS_WIN() ? "PC" : "Mac");
+
 const $ = (sel, el = document) => el.querySelector(sel);
 const $$ = (sel, el = document) => [...el.querySelectorAll(sel)];
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -162,15 +166,15 @@ function callCard(c) {
 function decisionHtml(meta) {
   const gentleDefault = Settings.setup?.mac?.gentle ?? true;
   return `<div class="decision">
-      <div class="title">Transcribe on this Mac instead?</div>
+      <div class="title">Transcribe on this ${DEV()} instead?</div>
       <p class="small">${esc(meta.decision?.reason || "Cloud transcription isn't available right now.")}</p>
       <div class="row-actions center-row">
-        <button class="btn primary" data-choice="local_gentle">Use this Mac (gentle)</button>
-        <button class="btn" data-choice="local">Use this Mac (fast)</button>
+        <button class="btn primary" data-choice="local_gentle">Use this ${DEV()} (gentle)</button>
+        <button class="btn" data-choice="local">Use this ${DEV()} (fast)</button>
         <button class="btn ghost" data-choice="retry">Try the cloud again</button>
       </div>
-      <p class="muted small"><b>Gentle</b> runs in the background on the Mac's efficiency cores, so the Mac stays usable, but a 1-hour call can take an hour or more.
-      <b>Fast</b> uses the Mac's graphics chip: quicker, but the Mac may lag while it runs${gentleDefault ? " (likely on an 8 GB Mac)" : ""}.
+      <p class="muted small"><b>Gentle</b> runs in the background at low priority, so the ${DEV()} stays usable, but a 1-hour call can take an hour or more.
+      <b>Fast</b> uses ${IS_WIN() ? "all processor cores" : "the Mac's graphics chip"}: quicker, but the ${DEV()} may lag while it runs${gentleDefault ? ` (likely on an 8 GB ${DEV()})` : ""}.
       <br>Or <a href="#/settings">connect / check Gladia or Groq in Settings</a>; waiting calls start automatically once it's connected.</p>
     </div>`;
 }
@@ -599,7 +603,7 @@ const Player = {
       b.push(`<span class="badge warn">Auto transcript</span>`);
       b.push(`<span class="badge">${d.speakers_separated ? "Speakers detected" : "Speakers not separated"}</span>`);
     }
-    const via = { gladia: "Gladia (cloud)", groq: "Groq (cloud)", mac: "this Mac" }[m.asr_service];
+    const via = { gladia: "Gladia (cloud)", groq: "Groq (cloud)", mac: `this ${DEV()}` }[m.asr_service];
     if (via) b.push(`<span class="badge" title="Which service transcribed this call">Transcribed by ${via}</span>`);
     if (m.duration) b.push(`<span class="badge">${fmtTime(m.duration)}</span>`);
     return b.join("");
@@ -871,7 +875,7 @@ const Player = {
     const btn = `<button class="btn small ${sum.status === "done" ? "" : "primary"}" id="sum-btn" ${canRun ? "" : "disabled"}>${sum.status === "done" ? "Regenerate" : "Generate summary"}</button>`;
     let body = "";
     if (sum.status === "running") {
-      body = `<p class="muted small">Summarising with ${esc(sum.model)} on your Mac… ${Math.round((sum.progress || 0) * 100)}%<br>Takes a few minutes for a one-hour call.</p>`;
+      body = `<p class="muted small">Summarising with ${esc(sum.model)} on your ${DEV()}… ${Math.round((sum.progress || 0) * 100)}%<br>Takes a few minutes for a one-hour call.</p>`;
       setTimeout(() => this.tab === "summary" && this.id && this.panelSummary(el), 3000);
     } else if (sum.status === "done") {
       body = `<div class="summary">${renderMarkdown(sum.text)}</div><p class="muted small" style="padding:0 6px">Generated locally by ${esc(sum.model)}. AI summaries can be wrong — click through to the transcript to verify.</p>`;

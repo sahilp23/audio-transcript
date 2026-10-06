@@ -1,7 +1,7 @@
 """'Report a problem': builds a bug report and a pre-filled GitHub issue link.
 
 The repository is public, so everything that goes into the issue is redacted:
-API tokens are masked and the Mac's home folder (which contains your user name)
+API tokens are masked and the home folder (which contains your user name)
 is replaced with "~". The full report is also saved locally.
 """
 
@@ -13,7 +13,7 @@ from pathlib import Path
 
 from . import __version__, components, config, diarize
 
-LOG_FILE = Path.home() / "Library" / "Logs" / "Concall Player" / "app.log"
+LOG_FILE = config.LOG_FILE
 MAX_BODY = 5500  # characters; GitHub's new-issue links stop working when the URL gets too long
 
 
@@ -27,12 +27,13 @@ def redact(text: str) -> str:
     home = str(Path.home())
     if home and home != "/":
         text = text.replace(home, "~")
+    text = re.sub(r"(?i)([A-Z]:\\Users\\)[^\\\s]+", r"\1<you>", text)
     return re.sub(r"/Users/[^/\s]+", "/Users/<you>", text)
 
 
 def _log_tail(lines: int) -> str:
     try:
-        content = LOG_FILE.read_text(errors="replace").splitlines()
+        content = LOG_FILE.read_text(encoding="utf-8", errors="replace").splitlines()
     except FileNotFoundError:
         return "(no log file)"
     return "\n".join(content[-lines:])
@@ -43,11 +44,11 @@ def _environment() -> str:
     settings = config.load_settings()
     mac = platform.mac_ver()[0] or platform.platform()
     rows = [
-        f"- App version: {__version__} ({'Mac app' if config.APP_MODE else 'from source'})",
-        f"- macOS: {mac}, {platform.machine()}, {config.total_ram_gb():.0f} GB RAM",
+        f"- App version: {__version__} ({config.DEVICE + ' app' if config.APP_MODE else 'from source'})",
+        f"- System: {mac}, {platform.machine()}, {config.total_ram_gb():.0f} GB RAM",
         f"- Cloud transcription: Gladia {'connected' if config.gladia_key() else 'not connected'}, "
         f"Groq {'connected' if config.groq_key() else 'not connected'}",
-        f"- Mac mode: {settings['mac_mode']} (gentle={config.gentle_mode()})",
+        f"- Processing mode: {settings['mac_mode']} (gentle={config.gentle_mode()})",
         f"- Speaker separation: {diarize.available() or 'ready'}",
         "- Components: " + ", ".join(
             f"{k}={'installed' if v.get('installed') else v.get('state')}" + (f" (error: {v['error']})" if v.get("error") else "")
@@ -74,7 +75,7 @@ def build(description: str, context: dict) -> dict:
     reports = config.SUPPORT_DIR / "reports"
     reports.mkdir(parents=True, exist_ok=True)
     path = reports / f"report-{time.strftime('%Y%m%d-%H%M%S')}.md"
-    path.write_text(full)
+    path.write_text(full, encoding="utf-8")
 
     # The issue gets as much of the log as fits in a link.
     head = redact(head)

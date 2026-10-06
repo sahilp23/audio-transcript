@@ -1,4 +1,4 @@
-"""ffmpeg helpers. The Mac app doesn't need Homebrew: it uses the ffmpeg binary
+"""ffmpeg helpers. The app doesn't need Homebrew: it uses the ffmpeg binary
 shipped in the imageio-ffmpeg package and puts it on PATH as `ffmpeg` (Whisper
 calls it by that name)."""
 
@@ -22,9 +22,16 @@ def ensure_ffmpeg() -> str:
     try:
         import imageio_ffmpeg
     except ImportError:
-        raise RuntimeError("ffmpeg not found. Install it with: brew install ffmpeg")
+        raise RuntimeError("ffmpeg not found. Install it (Mac: brew install ffmpeg) or reinstall the app.")
     exe = Path(imageio_ffmpeg.get_ffmpeg_exe())
     config.BIN_DIR.mkdir(parents=True, exist_ok=True)
+    if config.IS_WINDOWS:
+        # Symlinks need admin rights on Windows: keep a copy named ffmpeg.exe instead.
+        copy = config.BIN_DIR / "ffmpeg.exe"
+        if not copy.exists() or copy.stat().st_size != exe.stat().st_size:
+            shutil.copyfile(exe, copy)
+        os.environ["PATH"] = f"{config.BIN_DIR}{os.pathsep}{os.environ.get('PATH', '')}"
+        return str(copy)
     link = config.BIN_DIR / "ffmpeg"
     if link.is_symlink() or link.exists():
         if link.resolve() != exe.resolve():
@@ -36,14 +43,14 @@ def ensure_ffmpeg() -> str:
 
 
 def run(*args: str) -> None:
-    proc = subprocess.run([ensure_ffmpeg(), "-y", "-loglevel", "error", *args], capture_output=True, text=True)
+    proc = subprocess.run([ensure_ffmpeg(), "-y", "-loglevel", "error", *args], capture_output=True, text=True, encoding="utf-8", errors="replace")
     if proc.returncode != 0:
         raise RuntimeError("ffmpeg failed: " + proc.stderr.strip()[-500:])
 
 
 def duration(path: Path) -> float:
     """Media duration in seconds, read from ffmpeg's header output."""
-    proc = subprocess.run([ensure_ffmpeg(), "-hide_banner", "-i", str(path)], capture_output=True, text=True)
+    proc = subprocess.run([ensure_ffmpeg(), "-hide_banner", "-i", str(path)], capture_output=True, text=True, encoding="utf-8", errors="replace")
     m = re.search(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)", proc.stderr)
     if m:
         h, mnt, s = m.groups()
@@ -51,7 +58,7 @@ def duration(path: Path) -> float:
     if "Invalid data" in proc.stderr or "No such file" in proc.stderr:
         raise RuntimeError("This file doesn't look like audio ffmpeg can read.")
     # Some streams have no header duration: decode once to measure.
-    proc = subprocess.run([ensure_ffmpeg(), "-hide_banner", "-i", str(path), "-f", "null", "-"], capture_output=True, text=True)
+    proc = subprocess.run([ensure_ffmpeg(), "-hide_banner", "-i", str(path), "-f", "null", "-"], capture_output=True, text=True, encoding="utf-8", errors="replace")
     times = re.findall(r"time=(\d+):(\d+):(\d+(?:\.\d+)?)", proc.stderr)
     if not times:
         raise RuntimeError("Couldn't read the audio length")

@@ -1,4 +1,5 @@
-"""macOS notifications (e.g. "transcript ready") when running as the Mac app."""
+"""System notifications (e.g. "transcript ready") when running as the desktop app.
+macOS: Notification Center. Windows: no pop-up yet; the app window shows the status."""
 
 import subprocess
 

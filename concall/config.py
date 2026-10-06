@@ -1,8 +1,9 @@
 """Runtime settings.
 
 Two ways to run:
-  * Mac app (CONCALL_APP=1, set by the launcher): everything lives in
-    ~/Library/Application Support/Concall Player, settings are edited in the app.
+  * Desktop app (CONCALL_APP=1, set by the launcher): everything lives in
+    ~/Library/Application Support/Concall Player (Mac) or
+    %LOCALAPPDATA%\Concall Player (Windows); settings are edited in the app.
   * Developer mode (`./run.sh` or `python -m concall`): data in ./data, settings
     from environment variables or a .env file.
 
@@ -24,7 +25,7 @@ def _load_dotenv() -> None:
     env_file = ROOT / ".env"
     if not env_file.exists():
         return
-    for line in env_file.read_text().splitlines():
+    for line in env_file.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
@@ -36,20 +37,32 @@ _load_dotenv()
 
 IS_MAC = platform.system() == "Darwin"
 IS_APPLE_SILICON = IS_MAC and platform.machine() == "arm64"
+IS_WINDOWS = platform.system() == "Windows"
+DEVICE = "Mac" if IS_MAC else "PC"  # for messages: "Transcribe on this Mac/PC?"
 APP_MODE = os.environ.get("CONCALL_APP") == "1"
 
 if os.environ.get("CONCALL_SUPPORT_DIR"):
     SUPPORT_DIR = Path(os.environ["CONCALL_SUPPORT_DIR"]).expanduser()
 elif APP_MODE and IS_MAC:
     SUPPORT_DIR = Path.home() / "Library" / "Application Support" / "Concall Player"
+elif APP_MODE and IS_WINDOWS:
+    SUPPORT_DIR = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local") / "Concall Player"
 else:
     SUPPORT_DIR = ROOT / "data"
 
 DATA_DIR = Path(os.environ.get("CONCALL_DATA_DIR", SUPPORT_DIR)).expanduser()
 SETTINGS_FILE = SUPPORT_DIR / "settings.json"
 BIN_DIR = SUPPORT_DIR / "bin"
+if os.environ.get("CONCALL_LOG_DIR"):
+    LOG_DIR = Path(os.environ["CONCALL_LOG_DIR"]).expanduser()
+elif IS_MAC:
+    LOG_DIR = Path.home() / "Library" / "Logs" / "Concall Player"
+else:
+    LOG_DIR = SUPPORT_DIR / "logs"
+LOG_FILE = LOG_DIR / "app.log"
 
-# Set by the Mac launcher: the bundled `uv` (installs Python packages) and the .app path.
+# Set by the launcher: the bundled `uv` (installs Python packages) and the app's location
+# (the .app on a Mac, the launcher script on Windows; used to restart after an update).
 UV = os.environ.get("CONCALL_UV")
 APP_PATH = os.environ.get("CONCALL_APP_PATH")
 
@@ -86,7 +99,7 @@ _lock = threading.Lock()
 
 def load_settings() -> dict:
     try:
-        data = json.loads(SETTINGS_FILE.read_text())
+        data = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
     except (FileNotFoundError, ValueError):
         data = {}
     return {**DEFAULTS, **data}
@@ -98,7 +111,7 @@ def save_settings(patch: dict) -> dict:
         data.update({k: v for k, v in patch.items() if k in DEFAULTS})
         SUPPORT_DIR.mkdir(parents=True, exist_ok=True)
         tmp = SETTINGS_FILE.with_suffix(".tmp")
-        tmp.write_text(json.dumps(data, indent=2))
+        tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
         os.chmod(tmp, 0o600)  # holds the Hugging Face token and API keys
         os.replace(tmp, SETTINGS_FILE)
         return data
@@ -131,6 +144,23 @@ def gladia_key() -> str:
 
 
 def total_ram_gb() -> float:
+    if IS_WINDOWS:
+        try:
+            import ctypes
+
+            class MemoryStatus(ctypes.Structure):
+                _fields_ = [("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong),
+                            ("ullTotalPhys", ctypes.c_ulonglong), ("ullAvailPhys", ctypes.c_ulonglong),
+                            ("ullTotalPageFile", ctypes.c_ulonglong), ("ullAvailPageFile", ctypes.c_ulonglong),
+                            ("ullTotalVirtual", ctypes.c_ulonglong), ("ullAvailVirtual", ctypes.c_ulonglong),
+                            ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
+
+            st = MemoryStatus()
+            st.dwLength = ctypes.sizeof(MemoryStatus)
+            ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(st))
+            return st.ullTotalPhys / 1e9
+        except Exception:
+            return 16.0
     try:
         return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / 1e9
     except (ValueError, OSError, AttributeError):
@@ -138,7 +168,7 @@ def total_ram_gb() -> float:
 
 
 def gentle_mode() -> bool:
-    """Run local processing at low priority on the efficiency cores. Default on for <=8 GB Macs."""
+    """Run local processing at low priority on a few cores. Default on for <=8 GB computers."""
     mode = load_settings()["mac_mode"]
     if mode in ("gentle", "fast"):
         return mode == "gentle"

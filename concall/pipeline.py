@@ -107,12 +107,12 @@ def process(call_id: str) -> None:
 
                 components.ensure_speech_ready(on_setup)
                 store.update_meta(call_id, progress=0.05, stage=(
-                    "Transcribing on this Mac (gentle mode: slower, keeps the Mac usable)" if gentle
-                    else "Transcribing on this Mac"))
+                    f"Transcribing on this {config.DEVICE} (gentle mode: slower, keeps the {config.DEVICE} usable)" if gentle
+                    else f"Transcribing on this {config.DEVICE}"))
                 try:
                     result = isolated.run("asr", str(wav), {"duration": duration, "prompt": prompt}, gentle, on_progress)
                 except Exception as exc:
-                    raise RuntimeError(f"Speech-to-text on this Mac failed: {exc}") from exc
+                    raise RuntimeError(f"Speech-to-text on this {config.DEVICE} failed: {exc}") from exc
                 cloud_diar, service = None, "mac"
             store.write_json(asr_path, result)
             if cloud_diar:
@@ -187,7 +187,7 @@ def _transcribe_in_cloud(call_id, audio, duration, prompt, on_progress, warnings
             problems.append(str(exc))
     if not gkey and not key:
         ask_local(call_id, "Cloud transcription isn't connected yet (Gladia or Groq). Connect one in "
-                           "Settings for fast transcription, or use this Mac.")
+                           f"Settings for fast transcription, or use this {config.DEVICE}.")
     else:
         if not key:
             problems.append("Groq isn't connected as a backup.")
@@ -198,7 +198,7 @@ def _transcribe_in_cloud(call_id, audio, duration, prompt, on_progress, warnings
 def ask_local(call_id: str, reason: str) -> None:
     """Pause the call and ask the user whether to transcribe on this Mac."""
     meta = store.update_meta(call_id, status="needs_input", stage="Waiting for your OK", decision={"reason": reason})
-    notify.send(f"{meta['company']}: {reason}", "Transcribe on this Mac?")
+    notify.send(f"{meta['company']}: {reason}", f"Transcribe on this {config.DEVICE}?")
 
 
 def decide(call_id: str, choice: str) -> dict:

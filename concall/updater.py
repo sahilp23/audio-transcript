@@ -12,6 +12,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
 import threading
@@ -98,7 +99,7 @@ def install() -> dict:
                 roots = [p for p in out.iterdir() if p.is_dir()]
                 if len(roots) != 1 or not (roots[0] / "concall" / "__init__.py").exists():
                     raise RuntimeError("Downloaded update doesn't look like Concall Player")
-                text = (roots[0] / "concall" / "__init__.py").read_text()
+                text = (roots[0] / "concall" / "__init__.py").read_text(encoding="utf-8")
                 m = re.search(r'__version__\s*=\s*"([^"]+)"', text)
                 if not m or parse_version(m.group(1)) != parse_version(info["latest"]):
                     raise RuntimeError("Update version mismatch")
@@ -106,7 +107,7 @@ def install() -> dict:
                     shutil.rmtree(dest)
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 shutil.move(str(roots[0]), dest)
-            (config.SUPPORT_DIR / "app" / "current").write_text(str(dest))
+            (config.SUPPORT_DIR / "app" / "current").write_text(str(dest), encoding="utf-8")
             _cleanup_old(keep=dest)
             _install.update(state="done", message="Installed. Restart to finish.")
         except Exception as exc:
@@ -127,6 +128,13 @@ def restart() -> bool:
     """Relaunch the app (the launcher picks up the new version)."""
     if not config.APP_PATH:
         return False
-    subprocess.Popen(["/bin/sh", "-c", 'sleep 2; /usr/bin/open "$0"', config.APP_PATH], start_new_session=True)
+    if config.IS_WINDOWS:
+        # Start the launcher again; it waits for this process to exit before checking packages.
+        pythonw = Path(sys.executable).with_name("pythonw.exe")
+        exe = str(pythonw if pythonw.exists() else sys.executable)
+        flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+        subprocess.Popen([exe, config.APP_PATH, "--after-pid", str(os.getpid())], creationflags=flags, close_fds=True)
+    else:
+        subprocess.Popen(["/bin/sh", "-c", 'sleep 2; /usr/bin/open "$0"', config.APP_PATH], start_new_session=True)
     threading.Timer(0.5, lambda: os._exit(0)).start()
     return True

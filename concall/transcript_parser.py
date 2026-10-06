@@ -57,7 +57,7 @@ def read_text(path: Path) -> str:
 
         reader = PdfReader(str(path))
         return "\n\f\n".join((p.extract_text() or "") for p in reader.pages)
-    return path.read_text(errors="replace")
+    return path.read_text(encoding="utf-8", errors="replace")
 
 
 def _strip_headers_footers(text: str) -> list[str]:

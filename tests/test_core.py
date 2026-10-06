@@ -766,3 +766,36 @@ def test_report_hides_gladia_key(client):
 
     config.save_settings({"gladia_key": "abcd1234-secret-key-value-0000"})
     assert "secret" not in report.redact("key=abcd1234-secret-key-value-0000")
+
+
+def test_windows_launcher_picks_update_and_rolls_back(tmp_path, monkeypatch):
+    import importlib.machinery
+    import importlib.util
+
+    monkeypatch.setenv("CONCALL_SUPPORT_DIR", str(tmp_path / "support"))
+    monkeypatch.setenv("CONCALL_HEADLESS", "1")
+    path = str(Path(__file__).parent.parent / "packaging" / "windows" / "launcher.pyw")
+    spec = importlib.util.spec_from_loader("winlauncher", importlib.machinery.SourceFileLoader("winlauncher", path))
+    launcher = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(launcher)
+
+    def code(name, version):
+        d = tmp_path / name / "concall"
+        d.mkdir(parents=True)
+        (d / "__init__.py").write_text(f'__version__ = "{version}"\n', encoding="utf-8")
+        return d.parent
+
+    monkeypatch.setattr(launcher, "BUNDLED", code("installed", "0.5.0"))
+    update = code("update", "0.5.1")
+    launcher.CURRENT_FILE.parent.mkdir(parents=True)
+    assert launcher.pick_code() == launcher.BUNDLED  # no update installed
+    launcher.CURRENT_FILE.write_text(str(update), encoding="utf-8")
+    assert launcher.pick_code() == update
+    # The update didn't start last time: back to the installed version, and forget the update.
+    launcher.STARTING.write_text(str(update), encoding="utf-8")
+    assert launcher.pick_code() == launcher.BUNDLED
+    assert not launcher.CURRENT_FILE.exists()
+    # An update older than the installed copy is ignored.
+    launcher.STARTING.unlink()
+    launcher.CURRENT_FILE.write_text(str(code("old", "0.4.9")), encoding="utf-8")
+    assert launcher.pick_code() == launcher.BUNDLED

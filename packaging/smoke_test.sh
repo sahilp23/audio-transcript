@@ -1,12 +1,24 @@
 #!/bin/bash
-# End-to-end test of the built app on a clean Mac (used in CI):
+# End-to-end test of the built app on a clean Mac or Windows PC (used in CI):
 # first-launch setup, speech engine install, model download, a real
-# transcription of speech generated with macOS `say`, and the speaker-
-# separation install. Uses the small Whisper model to keep CI fast.
-#   packaging/macos/smoke_test.sh "dist/Concall Player.app"
+# transcription of generated speech (macOS `say` / Windows speech synthesis),
+# and the speaker-separation install. Uses the small Whisper model to keep CI fast.
+#   packaging/smoke_test.sh "dist/Concall Player.app"        (Mac)
+#   packaging/smoke_test.sh "<installed folder>"              (Windows, Git Bash)
 set -euo pipefail
 APP="$1"
-WORK="$(mktemp -d)"
+if [ -d "$APP/Contents" ]; then OS=mac; else OS=win; fi
+if [ "$OS" = win ]; then
+  WORK="$(cygpath -m "$(mktemp -d)")"  # C:/... paths work for bash and Windows programs alike
+  HOSTPY=python
+  CODE="$APP/app"
+  VPY="$WORK/support/venv/Scripts/python.exe"
+else
+  WORK="$(mktemp -d)"
+  HOSTPY=python3
+  CODE="$APP/Contents/Resources/app"
+  VPY="$WORK/support/venv/bin/python"
+fi
 export CONCALL_SUPPORT_DIR="$WORK/support"
 export CONCALL_HEADLESS=1
 export CONCALL_LOG_STDOUT=1
@@ -16,7 +28,14 @@ export FASTER_WHISPER_MODEL="tiny.en"
 BASE="http://127.0.0.1:$PORT"
 H=(-H "X-Concall: 1")
 
-"$APP/Contents/MacOS/Concall Player" > "$WORK/app.log" 2>&1 &
+if [ "$OS" = win ]; then
+  # What the installer does after copying files, then what the Start-menu shortcut runs.
+  cmd //c "$(cygpath -w "$APP/setup.cmd")" || { cat "$WORK/support/logs/setup.log"; exit 1; }
+  echo "✓ installer setup step (Python + core packages)"
+  "$VPY" "$APP/launcher.pyw" > "$WORK/app.log" 2>&1 &
+else
+  "$APP/Contents/MacOS/Concall Player" > "$WORK/app.log" 2>&1 &
+fi
 PID=$!
 cleanup() { kill "$PID" 2>/dev/null || true; echo "----- app log -----"; tail -n 80 "$WORK/app.log"; }
 trap cleanup EXIT
@@ -30,7 +49,7 @@ wait_for() {  # wait_for <seconds> <description> <command...>
   done
   echo "✗ timed out: $what"; return 1
 }
-json() { python3 -c "import sys,json; d=json.load(sys.stdin); print($1)"; }
+json() { "$HOSTPY" -c "import sys,json; d=json.load(sys.stdin); print($1)"; }
 
 wait_for 600 "app started (first-launch setup)" curl -sf "$BASE/api/ping"
 curl -sf "$BASE/api/status" | json "d['version'], d['asr_engine'], d['app_mode']"
@@ -38,8 +57,14 @@ curl -sf "$BASE/api/status" | json "d['version'], d['asr_engine'], d['app_mode']
 engine_ready() { curl -sf "$BASE/api/setup" | json "d['components']['engine']['installed'] and d['components']['speech_model']['installed']" | grep -q True; }
 wait_for 1500 "speech engine installed and model downloaded" engine_ready
 
-AUDIO="$WORK/speech.aiff"
-say -o "$AUDIO" "Good afternoon everyone. Revenue grew eighteen percent this quarter, and EBITDA margins improved. We will now begin the question and answer session."
+SPEECH="Good afternoon everyone. Revenue grew eighteen percent this quarter, and EBITDA margins improved. We will now begin the question and answer session."
+if [ "$OS" = win ]; then
+  AUDIO="$WORK/speech.wav"
+  powershell -NoProfile -Command "Add-Type -AssemblyName System.Speech; \$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; \$s.SetOutputToWaveFile('$AUDIO'); \$s.Speak('$SPEECH'); \$s.Dispose()"
+else
+  AUDIO="$WORK/speech.aiff"
+  say -o "$AUDIO" "$SPEECH"
+fi
 
 upload() { curl -sf "${H[@]}" -F company="Smoke Test" -F period="$1" -F audio=@"$AUDIO" "$BASE/api/calls" | json "d['id']"; }
 status_of() { curl -sf "$BASE/api/calls/$1" | json "d['status']"; }
@@ -55,7 +80,7 @@ wait_status() {  # wait_status <id> <regex> <seconds>
 text_of() { curl -sf "$BASE/api/calls/$1/doc" | json "' '.join(w[0] for t in d['turns'] for p in t['paras'] for w in p['w'])"; }
 decide() { curl -sf -X POST "${H[@]}" -H "Content-Type: application/json" -d "{\"choice\": \"$2\"}" "$BASE/api/calls/$1/decision" >/dev/null; }
 
-# 1. No cloud key: the app must ask before using the Mac, then transcribe locally (fast mode, GPU).
+# 1. No cloud key: the app must ask before using the computer, then transcribe locally (fast mode).
 ID=$(upload "Q1")
 wait_status "$ID" "needs_input" 120 >/dev/null
 echo "✓ asks before transcribing on the Mac"
@@ -96,7 +121,7 @@ curl -sf "$BASE/api/setup" | json "d['components']['speakers']['installed']" | g
 
 # Loading a pyannote model must work end to end (Hugging Face download + PyTorch
 # unpickling). This public model needs no token.
-PYTHONPATH="$APP/Contents/Resources/app" "$CONCALL_SUPPORT_DIR/venv/bin/python" - <<'PY'
+PYTHONPATH="$CODE" "$VPY" - <<'PY'
 from concall import diarize
 diarize.patch_pyannote_hub()
 from pyannote.audio import Model

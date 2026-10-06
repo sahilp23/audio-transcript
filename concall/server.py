@@ -69,7 +69,7 @@ def _store_official(call_id: str, transcript: Optional[UploadFile], transcript_t
         _save_upload(transcript, src)
         parsed = transcript_parser.parse_file(src)
     elif transcript_text and transcript_text.strip():
-        (d / "official_source.txt").write_text(transcript_text)
+        (d / "official_source.txt").write_text(transcript_text, encoding="utf-8")
         parsed = transcript_parser.parse_text(transcript_text)
     else:
         raise HTTPException(400, "No transcript provided")
@@ -226,6 +226,8 @@ OPEN_HOSTS = {"huggingface.co", "ollama.com", "github.com", "brew.sh", "groq.com
 def _open(target: str) -> None:
     if config.IS_MAC:
         subprocess.Popen(["/usr/bin/open", target])
+    elif config.IS_WINDOWS and not target.startswith("http"):
+        os.startfile(target)  # a folder: opens File Explorer
     else:
         webbrowser.open(target)
 
@@ -243,7 +245,7 @@ def open_url(body: dict):
 @app.post("/api/reveal")
 def reveal(body: dict):
     what = body.get("what")
-    target = {"data": config.DATA_DIR, "logs": Path.home() / "Library" / "Logs" / "Concall Player"}.get(what)
+    target = {"data": config.DATA_DIR, "logs": config.LOG_DIR}.get(what)
     if target is None:
         raise HTTPException(400, "Unknown folder")
     target.mkdir(parents=True, exist_ok=True)
@@ -263,9 +265,11 @@ def export(body: dict):
     while path.exists():
         n += 1
         path = downloads / f"{stem} ({n}){suffix}"
-    path.write_text(str(body.get("text") or ""))
+    path.write_text(str(body.get("text") or ""), encoding="utf-8")
     if config.IS_MAC:
         subprocess.Popen(["/usr/bin/open", "-R", str(path)])
+    elif config.IS_WINDOWS:
+        subprocess.Popen(["explorer", f"/select,{path}"])
     return {"ok": True, "path": str(path)}
 
 
@@ -279,9 +283,14 @@ def make_report(body: dict):
 
 @app.post("/api/clipboard")
 def clipboard(body: dict):
-    if not config.IS_MAC:
-        raise HTTPException(400, "Clipboard helper is Mac-only")
-    subprocess.run(["/usr/bin/pbcopy"], input=str(body.get("text") or ""), text=True, check=True)
+    text = str(body.get("text") or "")
+    if config.IS_MAC:
+        subprocess.run(["/usr/bin/pbcopy"], input=text, text=True, check=True)
+    elif config.IS_WINDOWS:
+        # clip.exe reads UTF-16 to keep ₹ and other non-ASCII characters intact.
+        subprocess.run(["clip"], input=text.encode("utf-16"), check=True)
+    else:
+        raise HTTPException(400, "Clipboard helper isn't available here")
     return {"ok": True}
 
 
@@ -479,7 +488,7 @@ def make_summary(call_id: str):
 @app.get("/")
 def index():
     # Version the asset URLs so an app update never shows stale cached files.
-    html = (STATIC / "index.html").read_text()
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
     for asset in ("/static/app.js", "/static/settings.js", "/static/styles.css"):
         html = html.replace(asset, f"{asset}?v={__version__}")
     return HTMLResponse(html, headers={"Cache-Control": "no-store"})

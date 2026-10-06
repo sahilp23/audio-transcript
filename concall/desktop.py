@@ -1,6 +1,7 @@
-"""Mac app entry point: runs the local server and shows it in a native window.
+"""Desktop app entry point: runs the local server and shows it in a native window
+(WebKit on the Mac, Edge WebView2 on Windows).
 
-Started by the launcher inside "Concall Player.app". Set CONCALL_HEADLESS=1 to run
+Started by the launcher ("Concall Player.app" on the Mac, launcher.pyw on Windows). Set CONCALL_HEADLESS=1 to run
 only the server (used by the automated build test).
 """
 

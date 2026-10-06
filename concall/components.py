@@ -86,7 +86,7 @@ def package_installed(name: str) -> bool:
     # Running from source without a stamp: trust what's importable.
     if not stamp.exists():
         return not config.UV
-    return stamp.read_text().strip() == _req_hash(name)
+    return stamp.read_text(encoding="utf-8").strip() == _req_hash(name)
 
 
 def _run_install(name: str, task: Task) -> None:
@@ -96,7 +96,7 @@ def _run_install(name: str, task: Task) -> None:
     else:
         cmd = [sys.executable, "-m", "pip", "install", "-r", str(req)]
     task.message = "Starting…"
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, encoding="utf-8", errors="replace")
     tail: list[str] = []
     for line in proc.stdout:  # type: ignore[union-attr]
         line = line.strip()
@@ -112,7 +112,7 @@ def _run_install(name: str, task: Task) -> None:
     importlib.invalidate_caches()
     stamp = _stamp_path(name)
     stamp.parent.mkdir(parents=True, exist_ok=True)
-    stamp.write_text(_req_hash(name))
+    stamp.write_text(_req_hash(name), encoding="utf-8")
 
 
 def _start(key: str, work: Callable[[Task], None]) -> Task:

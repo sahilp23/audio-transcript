@@ -22,7 +22,7 @@ It's built for the companies Quartr doesn't cover. The company's official transc
 
 ## Install
 
-**Mac app (recommended):** see **[INSTALL.md](INSTALL.md)**. You download a `.dmg`, drag the app to Applications and open it. No Terminal needed. The app installs its speech engine on its own, has a guided Hugging Face setup in Settings, and updates itself.
+**Mac or Windows app (recommended):** see **[INSTALL.md](INSTALL.md)**. On a Mac you download a `.dmg` and drag the app to Applications; on Windows you run `Concall-Player-Setup.exe`. No Terminal needed. The app installs its speech engine on its own, has a guided Hugging Face setup in Settings, and updates itself.
 
 **From source (developers):**
 
@@ -76,20 +76,22 @@ Speaker roles are read from the participants list on the first page. Page header
 | `concall/updater.py` | In-app updates from GitHub Releases |
 | `concall/desktop.py` | Mac app entry point (native window via pywebview) |
 | `concall/static/` | The interface (plain HTML/CSS/JS, no build step) |
-| `packaging/macos/` | `.app` launcher, build script, icon, CI smoke test |
+| `packaging/macos/` | Mac `.app` launcher, build script, icon |
+| `packaging/windows/` | Windows launcher (`launcher.pyw`), installer (Inno Setup), build script |
+| `packaging/smoke_test.sh` | End-to-end test of the installed app, run by CI on a Mac and on Windows |
 | `requirements.txt` | Core packages (the app's launcher installs these) |
 | `requirements-engine.txt` | Speech engine (installed by the app on first launch) |
 | `requirements-diarization.txt` | Speaker separation (installed when Hugging Face is connected) |
 
 ## Shipping a new version
 
-1. Make the change, run `pytest`, and push a branch. CI ([.github/workflows/mac-app.yml](.github/workflows/mac-app.yml)) runs the tests, builds the `.app` on a real Mac, installs it fresh and transcribes a spoken sample. Each branch push also publishes a **preview** pre-release you can install to try the change.
+1. Make the change, run `pytest`, and push a branch. CI ([.github/workflows/mac-app.yml](.github/workflows/mac-app.yml)) runs the tests, builds the `.app` on a real Mac and the installer on real Windows, installs each fresh and transcribes a spoken sample. Each branch push also publishes a **preview** pre-release you can install to try the change.
 2. Bump `__version__` in `concall/__init__.py` and add a `## <version>` section to `CHANGELOG.md`. That section becomes the "what's new" text in the app.
-3. Merge to `main`. CI publishes release `v<version>` with the `.dmg`. Installed apps offer it as a one-click update. Changed dependencies in the `requirements*.txt` files are installed automatically on the next launch.
+3. Merge to `main`. CI publishes release `v<version>` with the `.dmg` and the Windows `Concall-Player-Setup.exe`. Installed apps offer it as a one-click update. Changed dependencies in the `requirements*.txt` files are installed automatically on the next launch.
 
 Optional repository secrets for fuller CI coverage (Settings → Secrets and variables → Actions): `GROQ_API_KEY` tests Groq cloud transcription, `GLADIA_API_KEY` tests Gladia transcription + speakers, and `HF_TOKEN` tests real speaker separation on the Mac. Without them, those checks are skipped.
 
-Changes to the launcher (`packaging/macos/launcher.sh`) or `Info.plist` only reach people who download the new `.dmg`. Everything else updates in place.
+Changes to the launchers (`packaging/macos/launcher.sh`, `packaging/windows/launcher.pyw`), `Info.plist` or the installer only reach people who download the new `.dmg` / setup `.exe`. Everything else updates in place.
 
 ## Settings for developers (environment variables or `.env`)
 
