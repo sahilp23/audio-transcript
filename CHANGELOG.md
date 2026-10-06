@@ -2,6 +2,9 @@
 
 Each `## <version>` section becomes the release notes shown in the app's update screen.
 
+## 0.6.1
+- Remote link: when Cloudflare's sign-in runs out (it lasts about 4 hours) or the connection to your Mac drops, the page now reloads so you can sign in again, instead of showing "Can't reach the app server · Failed to fetch". If your Mac really can't be reached, it says so and why.
+
 ## 0.6.0
 - **Use Concall Player from another computer** (e.g. a locked-down office PC), with nothing to install there: Settings → **Use from other computers** → set your email and a password → **Turn on**. You get a private link that opens the app running on your Mac. Two locks: a one-time code emailed to you (by Cloudflare), and your password.
 - Your Mac must stay on, awake and online with Concall Player open; it's kept from sleeping while this is on (keep the lid open). The link changes when the app restarts: **Copy** or **Email me the link** in Settings.

@@ -345,7 +345,7 @@ const Settings = {
     const form = (editing) => `
       <ol class="steps">
         <li class="step"><span class="num">1</span><div class="grow"><div class="title">Your email address</div>
-          <div class="small muted">Only this address can open the link. Cloudflare emails it a short code each time you sign in on a new browser.</div>
+          <div class="small muted">Only this address can open the link. Cloudflare emails it a short code when you sign in, again about every 4 hours (Cloudflare's rule), and after this computer restarts the link.</div>
           <div class="token-row"><input id="remote-email" type="email" placeholder="you@example.com" value="${esc(r.email || "")}" autocomplete="off"></div></div></li>
         <li class="step"><span class="num">2</span><div class="grow"><div class="title">${editing && r.has_password ? "New password (leave empty to keep the current one)" : "Choose a password"}</div>
           <div class="small muted">At least 8 characters. You'll type it once per browser (it's remembered for 30 days).</div>

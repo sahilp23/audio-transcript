@@ -100,7 +100,7 @@ If you can't install apps on a computer (e.g. your office PC), you can open Conc
 
 **On the other computer:**
 1. Open the link in the browser.
-2. Cloudflare asks for your email and emails you a code. Enter it.
+2. Cloudflare asks for your email and emails you a code. Enter it. Cloudflare asks again about every 4 hours (its fixed rule); if a page you left open stops working, the app reloads it so you can enter a new code.
 3. Enter your Concall Player password. The browser remembers it for 30 days.
 
 **Good to know:**
