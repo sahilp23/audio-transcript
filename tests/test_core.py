@@ -973,7 +973,7 @@ def test_website_keeps_calls_in_google_drive(tmp_path, monkeypatch):
         for name in ("meta.json", "asr.json", "diar.json", "doc.json"):
             assert drive.named(name), name
         assert drive.named("settings.json")
-        c.patch(f"/api/calls/{call_id}/user", json={"notes": "check margins"})
+        c.patch(f"/api/calls/{call_id}/user", json={"notes": "check margins", "position": 900.5, "played_at": 1_790_000_000})
         assert drivesync.flush(10)
 
     # The free host goes to sleep and its disk is wiped; a new visit restores everything from Drive.
@@ -987,6 +987,8 @@ def test_website_keeps_calls_in_google_drive(tmp_path, monkeypatch):
         _sign_in(c)
         calls = c.get("/api/calls").json()
         assert [m["id"] for m in calls] == [call_id]
+        # The library shows where you stopped listening, on any device.
+        assert calls[0]["position"] == 900.5 and calls[0]["played_at"] == 1_790_000_000
         assert c.get(f"/api/calls/{call_id}/user").json()["notes"] == "check margins"
         assert c.get(f"/api/calls/{call_id}/doc").json()["speakers_separated"] is True
         assert c.get(f"/api/calls/{call_id}/audio").status_code == 200
