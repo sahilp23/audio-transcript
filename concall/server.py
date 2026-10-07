@@ -394,7 +394,13 @@ def clipboard(body: dict):
 
 @app.get("/api/calls")
 def list_calls():
-    return store.list_calls()
+    calls = store.list_calls()
+    if config.WEB_MODE:  # the library shows how far you've listened (user.json is already local, see drivesync.EAGER)
+        for meta in calls:
+            user = store.get_user(meta["id"])
+            meta["position"] = user.get("position") or 0
+            meta["played_at"] = user.get("played_at") or 0
+    return calls
 
 
 @app.post("/api/calls")
@@ -665,7 +671,7 @@ def get_user(call_id: str):
 @app.patch("/api/calls/{call_id}/user")
 def patch_user(call_id: str, body: dict):
     _meta_or_404(call_id)
-    allowed = {k: v for k, v in body.items() if k in ("bookmarks", "speakers", "position", "notes", "rate", "clear")}
+    allowed = {k: v for k, v in body.items() if k in ("bookmarks", "speakers", "position", "played_at", "notes", "rate", "clear")}
     return store.update_user(call_id, allowed)
 
 

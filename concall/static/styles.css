@@ -133,6 +133,23 @@ main { flex: 1; min-height: 0; overflow: auto; }
 .badge.err { background: color-mix(in srgb, var(--bad) 14%, transparent); color: var(--bad); }
 .badge.accent { background: var(--accent-soft); color: var(--accent); }
 .card-menu { position: absolute; top: 8px; right: 8px; }
+.listened { display: flex; align-items: center; gap: 10px; margin-top: 4px; }
+.listened-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.card-play {
+  flex: none; width: 34px; height: 34px; border-radius: 50%; border: 1.5px solid var(--border); background: var(--surface);
+  color: var(--text); display: grid; place-items: center; cursor: pointer; padding: 0;
+}
+.card-play:hover { border-color: var(--accent); color: var(--accent); }
+.card-play svg { width: 16px; height: 16px; margin-left: 2px; }
+.card-play.big { width: 48px; height: 48px; }
+.card-play.big svg { width: 22px; height: 22px; }
+.continue-card {
+  display: flex; align-items: center; gap: 14px; max-width: 520px; margin-bottom: 22px; cursor: pointer;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; box-shadow: var(--shadow);
+}
+.continue-card:hover { border-color: var(--accent); }
+.continue-card .period { font-weight: 650; font-size: 16px; }
+.progress.thin { height: 4px; }
 .progress { height: 5px; background: var(--surface-2); border-radius: 9px; overflow: hidden; }
 .progress > div { height: 100%; background: var(--accent); transition: width .4s; }
 .empty { text-align: center; padding: 80px 20px; color: var(--text-2); }

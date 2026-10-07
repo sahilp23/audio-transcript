@@ -20,6 +20,10 @@ function fmtDate(d) {
   const dt = new Date(d + "T00:00:00");
   return isNaN(dt) ? d : dt.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
 }
+function todayISO() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
 function initials(name) {
   const parts = String(name || "?").replace(/[^\p{L}\s]/gu, "").trim().split(/\s+/);
   return ((parts[0]?.[0] || "?") + (parts.length > 1 ? parts[parts.length - 1][0] : "")).toUpperCase();
@@ -123,6 +127,7 @@ async function renderLibrary() {
         <h1>Your calls</h1>
         <input id="lib-filter" placeholder="Filter companies…" value="${esc(state.libFilter || "")}">
       </div>
+      ${continueCard(calls)}
       ${companies.map((co) => `
         <section class="company">
           <h2><span class="company-avatar" style="background:${hashColor(co)}">${esc(initials(co))}</span>${esc(co)}</h2>
@@ -131,12 +136,17 @@ async function renderLibrary() {
     </div>`;
   const f = $("#lib-filter");
   f.addEventListener("input", debounce(() => { state.libFilter = f.value; renderLibrary().then(() => { const n = $("#lib-filter"); n.focus(); n.setSelectionRange(n.value.length, n.value.length); }); }, 200));
-  $$(".call-card", view).forEach((el) => {
+  $$(".call-card, .continue-card", view).forEach((el) => {
     el.addEventListener("click", (e) => {
       if (e.target.closest(".card-menu")) return;
       location.hash = `#/call/${el.dataset.id}`;
     });
   });
+  $$(".card-play", view).forEach((btn) => btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    state.autoplay = btn.closest("[data-id]").dataset.id;
+    location.hash = `#/call/${state.autoplay}`;
+  }));
   $$(".card-menu", view).forEach((btn) => btn.addEventListener("click", (e) => { e.stopPropagation(); cardMenu(btn, btn.closest(".call-card").dataset.id); }));
 
   if (calls.some((c) => c.status === "queued" || c.status === "processing")) {
@@ -164,6 +174,41 @@ function callCard(c) {
       <div class="date">${esc(fmtDate(c.date))}</div>
       <div class="badges">${statusBadges(c)}</div>
       ${busy ? `<div class="progress"><div style="width:${Math.round((c.progress || 0) * 100)}%"></div></div>` : ""}
+      ${listenedHtml(c)}
+    </div>`;
+}
+
+// Website: how far you've listened, saved in Drive so you can pause on one device and carry on on another.
+const PLAY_ICON = `<svg viewBox="0 0 24 24"><path d="M8 5.5l11 6.5-11 6.5z" fill="currentColor"/></svg>`;
+function listened(c) {
+  const pos = c.position || 0, dur = c.duration || 0;
+  if (!dur || pos <= 5) return null;
+  return { pos, dur, done: pos >= dur - 30, pct: Math.min(100, (pos / dur) * 100) };
+}
+function listenedHtml(c) {
+  if (!state.status?.web || c.status !== "ready") return "";
+  const l = listened(c);
+  const label = !l ? "Play" : l.done ? "Finished · play again" : `Resume at ${fmtTime(l.pos)} of ${fmtTime(l.dur)}`;
+  return `<div class="listened">
+      <button class="card-play" title="${esc(label)}">${PLAY_ICON}</button>
+      <div class="listened-info"><span class="small muted">${esc(label)}</span>
+        ${l ? `<div class="progress thin"><div style="width:${l.pct}%"></div></div>` : ""}</div>
+    </div>`;
+}
+function continueCard(calls) {
+  if (!state.status?.web || state.libFilter) return "";
+  const c = calls.filter((x) => x.status === "ready" && x.played_at && listened(x) && !listened(x).done)
+    .sort((a, b) => b.played_at - a.played_at)[0];
+  if (!c) return "";
+  const l = listened(c);
+  return `<div class="continue-card" data-id="${esc(c.id)}">
+      <button class="card-play big" title="Resume at ${fmtTime(l.pos)}">${PLAY_ICON}</button>
+      <div class="listened-info">
+        <div class="small muted">Continue listening</div>
+        <div class="period">${esc(c.company)} · ${esc(c.period || "Call")}</div>
+        <div class="progress thin"><div style="width:${l.pct}%"></div></div>
+        <div class="small muted">${fmtTime(l.pos)} of ${fmtTime(l.dur)}</div>
+      </div>
     </div>`;
 }
 
@@ -260,6 +305,7 @@ const Upload = {
     const dlg = $("#upload-dialog");
     const form = $("#upload-form");
     form.reset();
+    form.elements.date.closest("label").classList.toggle("hidden", !!state.status?.web);  // website: today's date is used
     $$(".drop", form).forEach((d) => d._reset && d._reset());
     $("#upload-error").classList.add("hidden");
     $("#upload-progress").classList.add("hidden");
@@ -312,7 +358,7 @@ Upload.submitWeb = async function () {
   let callId = null;
   try {
     if (!audio?.name) throw new Error("Choose the call recording first.");
-    const start = await api.post("/api/calls/new", { company: fd.get("company"), period: fd.get("period"), date: fd.get("date"), filename: audio.name });
+    const start = await api.post("/api/calls/new", { company: fd.get("company"), period: fd.get("period"), date: fd.get("date") || todayISO(), filename: audio.name });
     callId = start.meta.id;
     const fileId = await driveUpload(audio, start.name, start.folder, start.token, start.props, (p) => (bar.style.width = `${p * 100}%`));
     await api.post(`/api/calls/${callId}/uploaded`, { file_id: fileId });
@@ -969,7 +1015,9 @@ const Player = {
     const pos = +this.audio.currentTime.toFixed(1);
     if (Math.abs(pos - (this.user.position || 0)) < 1) return;
     this.user.position = pos;
-    api.patch(`/api/calls/${this.id}/user`, { position: pos }).catch(() => {});
+    const patch = { position: pos };
+    if (state.status?.web) patch.played_at = Math.round(Date.now() / 1000);  // library's "Continue listening"
+    api.patch(`/api/calls/${this.id}/user`, patch).catch(() => {});
   },
 
   /* ---------- export ---------- */
@@ -1063,12 +1111,19 @@ const Player = {
           toast(`Resumed at ${fmtTime(resume)}`);
         }
         this.sync();
+        this.autoplay();
       }, { once: true });
-    }
+    } else this.autoplay();
     this.sync();
     if ("mediaSession" in navigator) {
       navigator.mediaSession.metadata = new MediaMetadata({ title: `${this.meta.period} earnings call`, artist: this.meta.company, album: "Concall Player" });
     }
+  },
+
+  autoplay() {  // opened with a library play button
+    if (state.autoplay !== this.id) return;
+    state.autoplay = null;
+    this.audio.play().catch(() => {});
   },
 
   async toggleClear() {
