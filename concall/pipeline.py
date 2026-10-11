@@ -1,7 +1,8 @@
 """Background processing: audio prep -> speech-to-text -> speakers -> transcript doc.
 
 Speech-to-text runs in the cloud by default: Gladia first (words and speakers
-in one go), then Groq (words only; speakers are then separated on the Mac). If
+in one go), then Groq (words only; speakers are then separated on the Mac). On the
+website you pick Groq or Gladia per call (meta["cloud_service"]); the other is the fallback. If
 neither is possible (not connected, offline, free limits reached) the call pauses with status
 "needs_input" and the app asks whether to use this Mac instead; the answer is
 stored as meta["asr_route"] ("local" or "local_gentle") and the job resumes.
@@ -166,32 +167,54 @@ GLADIA_PAUSE = 24 * 3600  # after "free hours used up", skip Gladia for a day in
 
 
 def _transcribe_in_cloud(call_id, audio, duration, prompt, on_progress, warnings):
-    """Gladia, then Groq. Returns (asr result, speaker segments or None, service), or
+    """Gladia, then Groq (or the other way round when you picked Groq for this call on the
+    website: meta["cloud_service"]). Returns (asr result, speaker segments or None, service), or
     (None, None, None) after asking the user whether to use the Mac."""
     problems = []
     gkey = config.gladia_key()
-    paused = time.time() < float(config.load_settings().get("gladia_paused_until") or 0)
-    if gkey and paused:
-        problems.append("Gladia's free hours are used up for now.")
-    elif gkey:
+    key = config.groq_key()
+    chosen = store.get_meta(call_id).get("cloud_service")
+
+    def switched_to_groq() -> bool:  # website: "Switch to Groq" pressed while Gladia was working
+        return store.get_meta(call_id).get("cloud_service") == "groq"
+
+    def try_gladia():
+        if not gkey:
+            return None
+        if time.time() < float(config.load_settings().get("gladia_paused_until") or 0):
+            problems.append("Gladia's free hours are used up for now.")
+            return None
         store.update_meta(call_id, stage="Transcribing and separating speakers in the cloud (Gladia)", progress=0.05)
         try:
-            out = gladia.transcribe(str(audio), duration, gkey, on_progress)
+            extra = {"stop": switched_to_groq} if config.WEB_MODE else {}
+            out = gladia.transcribe(str(audio), duration, gkey, on_progress, **extra)
             return out["asr"], out["diar"], "gladia"
+        except gladia.Stopped:
+            return None
         except gladia.GladiaUnavailable as exc:
             if gladia.is_quota(str(exc)):
                 config.save_settings({"gladia_paused_until": time.time() + GLADIA_PAUSE})
             problems.append(str(exc))
-    key = config.groq_key()
-    if key:
+            return None
+
+    def try_groq():
+        if not key:
+            return None
         store.update_meta(call_id, stage="Transcribing in the cloud (Groq)", progress=0.05)
         try:
-            result = cloud.transcribe(str(audio), duration, prompt, key, on_progress)
-            if problems:
-                warnings.append(f"{problems[0]} Transcribed with Groq instead.")
-            return result, None, "groq"
+            return cloud.transcribe(str(audio), duration, prompt, key, on_progress), None, "groq"
         except cloud.CloudUnavailable as exc:
             problems.append(str(exc))
+            return None
+
+    order = (try_groq, try_gladia) if chosen == "groq" else (try_gladia, try_groq)
+    for attempt in order:
+        out = attempt()
+        if out:
+            if problems:
+                name = "Groq" if out[2] == "groq" else "Gladia"
+                warnings.append(f"{problems[0]} Transcribed with {name} instead.")
+            return out
     if not gkey and not key:
         ask_local(call_id, "Cloud transcription isn't connected yet (Gladia or Groq). Connect one in Settings" +
                   (" and press Try again." if config.WEB_MODE else f" for fast transcription, or use this {config.DEVICE}."))

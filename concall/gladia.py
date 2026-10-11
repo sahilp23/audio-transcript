@@ -44,6 +44,10 @@ class GladiaUnavailable(Exception):
     """Gladia can't transcribe this call right now (not connected, offline, free hours used up...)."""
 
 
+class Stopped(GladiaUnavailable):
+    """You switched this call to Groq while Gladia was working on it."""
+
+
 def _request(method: str, url: str, key: str, body: bytes = None, headers: dict = None, timeout: float = 60):
     req = urllib.request.Request(url, data=body, method=method, headers={
         "x-gladia-key": key, "User-Agent": USER_AGENT, "Accept": "application/json", **(headers or {})})
@@ -172,8 +176,9 @@ def parse_result(result: dict) -> tuple[list[dict], list[dict]]:
     return words, diar
 
 
-def transcribe(audio_path: str, duration: float, key: str, progress: Callable[[float], None]) -> dict:
-    """Returns {"asr": {...}, "diar": [...]}. Raises GladiaUnavailable."""
+def transcribe(audio_path: str, duration: float, key: str, progress: Callable[[float], None],
+               stop: Callable[[], bool] = lambda: False) -> dict:
+    """Returns {"asr": {...}, "diar": [...]}. Raises GladiaUnavailable (Stopped when stop() turns true)."""
     if duration > MAX_SECONDS:
         raise GladiaUnavailable(f"This recording is longer than Gladia's {MAX_SECONDS // 60}-minute limit.")
     with tempfile.TemporaryDirectory() as tmp:
@@ -184,6 +189,8 @@ def transcribe(audio_path: str, duration: float, key: str, progress: Callable[[f
         body, ctype = _multipart("audio", small, "audio/mp4")
         progress(0.05)
         uploaded = _call("POST", f"{API}/v2/upload", key, body, {"Content-Type": ctype}, timeout=600)
+    if stop():
+        raise Stopped("Switched to Groq.")
     audio_url = uploaded.get("audio_url")
     if not audio_url:
         raise GladiaUnavailable("Gladia didn't accept the upload. Please use Report a problem.")
@@ -208,6 +215,8 @@ def transcribe(audio_path: str, duration: float, key: str, progress: Callable[[f
         if status == "error":
             code = int(res.get("error_code") or 0)
             raise GladiaUnavailable(quota_message(code, "") or f"Gladia couldn't transcribe this call (error {code}).")
+        if stop():
+            raise Stopped("Switched to Groq.")
         if time.time() - started > MAX_POLL:
             raise GladiaUnavailable("Gladia is taking too long with this call.")
         progress(min(0.95, 0.15 + 0.8 * (time.time() - started) / expected))

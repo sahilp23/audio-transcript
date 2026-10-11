@@ -133,6 +133,12 @@ main { flex: 1; min-height: 0; overflow: auto; }
 .badge.err { background: color-mix(in srgb, var(--bad) 14%, transparent); color: var(--bad); }
 .badge.accent { background: var(--accent-soft); color: var(--accent); }
 .card-menu { position: absolute; top: 8px; right: 8px; }
+.service-pick { border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 12px 10px; margin: 0; display: grid; gap: 8px; }
+.service-pick legend { font-size: 13px; color: var(--text-2); padding: 0 4px; }
+.dialog .service-opt { display: flex; gap: 10px; align-items: flex-start; cursor: pointer; color: var(--text); font-weight: 400; font-size: 14px; }
+.dialog .service-opt input { margin-top: 3px; padding: 0; width: auto; }
+.service-opt > span { display: flex; flex-direction: column; gap: 2px; }
+.service-opt input:disabled + span { opacity: .5; }
 .listened { display: flex; align-items: center; gap: 10px; margin-top: 4px; }
 .listened-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
 .card-play {

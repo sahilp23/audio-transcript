@@ -20,6 +20,18 @@ function fmtDate(d) {
   const dt = new Date(d + "T00:00:00");
   return isNaN(dt) ? d : dt.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
 }
+// Hours of audio each cloud service transcribed (Groq: today; Gladia: this calendar month), from the call list.
+function serviceUse(calls) {
+  const now = new Date(), used = { groq: 0, gladia: 0 };
+  for (const c of calls) {
+    const t = new Date((c.created_at || 0) * 1000);
+    const month = t.getFullYear() === now.getFullYear() && t.getMonth() === now.getMonth();
+    if (c.asr_service === "groq" && month && t.getDate() === now.getDate()) used.groq += (c.duration || 0) / 3600;
+    if (c.asr_service === "gladia" && month) used.gladia += (c.duration || 0) / 3600;
+  }
+  return used;
+}
+function fmtHours(h) { return h < 1 ? `${Math.round(h * 60)} min` : `${h.toFixed(1)} h`; }
 function todayISO() {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -306,10 +318,29 @@ const Upload = {
     const form = $("#upload-form");
     form.reset();
     form.elements.date.closest("label").classList.toggle("hidden", !!state.status?.web);  // website: today's date is used
+    if (state.status?.web) this.showServices(form);
     $$(".drop", form).forEach((d) => d._reset && d._reset());
     $("#upload-error").classList.add("hidden");
     $("#upload-progress").classList.add("hidden");
     dlg.showModal();
+  },
+  // Website: pick Groq or Gladia for this call, with the free limits and roughly how much is used.
+  async showServices(form) {
+    const box = $("#service-pick");
+    box.classList.remove("hidden");
+    const setup = await api.get("/api/setup").catch(() => null);
+    const ok = { groq: !!setup?.groq?.connected, gladia: !!setup?.gladia?.connected && !setup?.gladia?.paused };
+    const used = serviceUse(state.calls || []);
+    $("[data-used=groq]", box).textContent = ok.groq ? `about ${fmtHours(used.groq)} used today` : "not connected (Settings)";
+    $("[data-used=gladia]", box).textContent = !setup?.gladia?.connected ? "not connected (Settings)"
+      : setup.gladia.paused ? "free hours used up for now" : `about ${fmtHours(used.gladia)} used this month`;
+    let pick = null;
+    try { pick = localStorage.getItem("concall.service"); } catch {}
+    if (!ok[pick]) pick = ok.groq ? "groq" : ok.gladia ? "gladia" : null;
+    for (const r of form.elements.service) {
+      r.disabled = !ok[r.value];
+      r.checked = r.value === pick;
+    }
   },
   submit(e) {
     e.preventDefault();
@@ -358,7 +389,8 @@ Upload.submitWeb = async function () {
   let callId = null;
   try {
     if (!audio?.name) throw new Error("Choose the call recording first.");
-    const start = await api.post("/api/calls/new", { company: fd.get("company"), period: fd.get("period"), date: fd.get("date") || todayISO(), filename: audio.name });
+    const start = await api.post("/api/calls/new", { company: fd.get("company"), period: fd.get("period"), date: fd.get("date") || todayISO(), filename: audio.name, service: fd.get("service") });
+    try { if (fd.get("service")) localStorage.setItem("concall.service", fd.get("service")); } catch {}
     callId = start.meta.id;
     const fileId = await driveUpload(audio, start.name, start.folder, start.token, start.props, (p) => (bar.style.width = `${p * 100}%`));
     await api.post(`/api/calls/${callId}/uploaded`, { file_id: fileId });
@@ -542,7 +574,10 @@ const Player = {
     } else {
       body = `<div class="progress"><div style="width:${pct}%"></div></div>
         <p><strong>${esc(meta.stage || "Processing")}</strong> — ${pct}%</p>
-        <p class="muted small">You can leave this page; processing continues in the background, and you'll get a notification when it's done.</p>`;
+        <p class="muted small">You can leave this page; processing continues in the background, and you'll get a notification when it's done.</p>
+        ${state.status?.web && /Gladia/.test(meta.stage || "") && meta.cloud_service !== "groq"
+          ? `<button class="btn" id="use-groq">Switch to Groq (faster, no speaker names)</button>` : ""}
+        ${meta.cloud_service === "groq" && /Gladia/.test(meta.stage || "") ? `<p class="muted small">Switching to Groq…</p>` : ""}`;
     }
     $("#view").innerHTML = `
       <div class="processing">
@@ -550,6 +585,9 @@ const Player = {
         ${body}
         <p><a href="#/">← Back to library</a></p>
       </div>`;
+    $("#use-groq")?.addEventListener("click", async () => {
+      try { await api.post(`/api/calls/${meta.id}/use-groq`); this.open(meta.id); } catch (e) { toast(e.message); }
+    });
     $("#retry-btn")?.addEventListener("click", async () => { await api.post(`/api/calls/${meta.id}/retry`); this.open(meta.id); });
     wireDecision($("#view"), meta.id, () => this.open(meta.id));
   },

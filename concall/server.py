@@ -440,6 +440,20 @@ def drive_status():
     return drivesync.status()
 
 
+@app.post("/api/calls/{call_id}/use-groq")
+def use_groq(call_id: str):
+    """Website: stop waiting for Gladia and transcribe this call with Groq (faster, no speaker names)."""
+    _web_only()
+    meta = _meta_or_404(call_id)
+    if not config.groq_key():
+        raise HTTPException(400, "Connect Groq in Settings first.")
+    meta = store.update_meta(call_id, cloud_service="groq")
+    if meta.get("status") in ("needs_input", "error") and not store.exists(store.call_dir(call_id) / "asr.json"):
+        store.update_meta(call_id, decision=None)
+        pipeline.enqueue(call_id)
+    return store.get_meta(call_id)
+
+
 @app.post("/api/calls/new")
 def new_web_call(body: dict):
     """Step 1 of adding a call on the website: make the call and its Drive folder, and hand the
@@ -450,7 +464,8 @@ def new_web_call(body: dict):
         raise HTTPException(400, "Company name is required")
     ext = (Path(str(body.get("filename") or "audio.mp3")).suffix.lower() or ".mp3")[:8]
     meta = store.create_call(company, str(body.get("period") or ""), str(body.get("date") or ""), f"audio{ext}")
-    meta = store.update_meta(meta["id"], status="uploading", stage="Uploading the recording")
+    service = body.get("service") if body.get("service") in ("gladia", "groq") else None
+    meta = store.update_meta(meta["id"], status="uploading", stage="Uploading the recording", cloud_service=service)
     return {"meta": meta, "folder": drivesync.folder_for(meta["id"]), "name": meta["audio_file"],
             "token": drivesync.access_token(), "props": {"concall": "file", "call": meta["id"]}}
 
