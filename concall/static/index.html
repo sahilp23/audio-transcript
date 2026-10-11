@@ -66,6 +66,15 @@
         <label>Quarter / event<input name="period" placeholder="e.g. Q1 FY27"></label>
       </div>
       <label>Call date<input name="date" type="date"></label>
+      <fieldset class="service-pick hidden" id="service-pick">
+        <legend>Transcribe with</legend>
+        <label class="service-opt"><input type="radio" name="service" value="groq">
+          <span><span><b>Groq</b> · fastest, no speaker names</span>
+            <span class="small muted">Free: 8 h of audio a day (2 h an hour) · <span data-used="groq"></span></span></span></label>
+        <label class="service-opt"><input type="radio" name="service" value="gladia">
+          <span><span><b>Gladia</b> · with speaker names</span>
+            <span class="small muted">Free: 10 h of audio a month · <span data-used="gladia"></span></span></span></label>
+      </fieldset>
       <label class="drop" id="audio-drop">
         <input type="file" name="audio" accept="audio/*,video/*,.mp3,.m4a,.wav,.aac,.ogg,.flac,.mp4,.webm,.amr,.wma" required>
         <span class="drop-text"><strong>Audio recording</strong> — drop a file or click to choose<br><span class="muted small">mp3, m4a, wav, mp4… anything ffmpeg can read</span></span>

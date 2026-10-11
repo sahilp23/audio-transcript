@@ -951,7 +951,7 @@ def test_website_keeps_calls_in_google_drive(tmp_path, monkeypatch):
     from concall import config, drivesync, gladia
 
     fake, diar, _ = make_asr()
-    monkeypatch.setattr(gladia, "transcribe", lambda audio, dur, key, progress: (
+    monkeypatch.setattr(gladia, "transcribe", lambda audio, dur, key, progress, stop=None: (
         progress(1.0), {"asr": {"engine": "gladia", "model": "gladia", "words": fake["words"]}, "diar": diar})[1])
     with c:
         _sign_in(c)
@@ -997,6 +997,56 @@ def test_website_keeps_calls_in_google_drive(tmp_path, monkeypatch):
         assert c.delete(f"/api/calls/{call_id}").status_code == 200
         assert not drive.named("doc.json") and not drive.named(call_id)
         assert ds2.ready(1)
+
+
+def test_website_lets_you_pick_groq_or_gladia(tmp_path, monkeypatch):
+    drive = FakeDrive()
+    server, c = web_app(tmp_path, monkeypatch, drive)
+    from concall import cloud, config, drivesync, gladia
+
+    fake, diar, _ = make_asr()
+    used = []
+
+    def fake_groq(audio, duration, prompt, key, progress):
+        used.append("groq")
+        return {"engine": "groq", "model": cloud.MODEL, "words": fake["words"]}
+
+    def slow_gladia(audio, dur, key, progress, stop=lambda: False):
+        used.append("gladia")
+        end = time.time() + 20
+        while not stop():  # Gladia still working...
+            assert time.time() < end, "never switched"
+            time.sleep(0.05)
+        raise gladia.Stopped("Switched to Groq.")
+
+    monkeypatch.setattr(cloud, "transcribe", fake_groq)
+    monkeypatch.setattr(gladia, "transcribe", slow_gladia)
+
+    def add(service=None):
+        r = c.post("/api/calls/new", json={"company": "Demo", "period": "Q1", "filename": "call.mp3", "service": service}).json()
+        file_id = drive.put("audio.mp3", _wav_bytes(), r["folder"], r["props"])
+        c.post(f"/api/calls/{r['meta']['id']}/uploaded", json={"file_id": file_id})
+        return r["meta"]["id"]
+
+    with c:
+        _sign_in(c)
+        c.get("/api/status")
+        assert drivesync.ready(10)
+        config.save_settings({"gladia_key": "k" * 36, "groq_key": "gsk_test"})
+        # Picked Groq: Gladia isn't used at all.
+        meta = _wait_ready(c, add("groq"))
+        assert meta["status"] == "ready" and meta["asr_service"] == "groq" and used == ["groq"]
+        # Picked Gladia, then "Switch to Groq" while it's still working.
+        call_id = add("gladia")
+        end = time.time() + 20
+        while "gladia" not in used:
+            assert time.time() < end
+            time.sleep(0.05)
+        assert c.post(f"/api/calls/{call_id}/use-groq").status_code == 200
+        meta = _wait_ready(c, call_id)
+        assert meta["status"] == "ready" and meta["asr_service"] == "groq", meta
+        assert not any("instead" in w for w in meta.get("warnings") or []), meta["warnings"]
+        assert used == ["groq", "gladia", "groq"]
 
 
 def test_website_imports_calls_from_the_mac_app(tmp_path, monkeypatch):
