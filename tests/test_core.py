@@ -992,6 +992,8 @@ def test_website_keeps_calls_in_google_drive(tmp_path, monkeypatch):
         assert c.get(f"/api/calls/{call_id}/user").json()["notes"] == "check margins"
         assert c.get(f"/api/calls/{call_id}/doc").json()["speakers_separated"] is True
         assert c.get(f"/api/calls/{call_id}/audio").status_code == 200
+        # Clear voice is a Mac-app feature only.
+        assert c.post(f"/api/calls/{call_id}/enhance").status_code == 404
         assert config2.load_settings()["gladia_key"] == "k" * 36
         # Deleting a call removes it from Drive as well.
         assert c.delete(f"/api/calls/{call_id}").status_code == 200

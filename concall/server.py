@@ -592,6 +592,8 @@ def decision(call_id: str, body: dict):
 @app.post("/api/calls/{call_id}/enhance")
 def enhance(call_id: str):
     """Make a cleaned-up copy of the audio for "Clear voice" playback."""
+    if config.WEB_MODE:
+        raise HTTPException(404, "Clear voice isn't available on the website.")
     meta = _meta_or_404(call_id)
     if meta.get("enhanced") in ("ready", "running"):
         return {"state": meta["enhanced"]}
@@ -649,6 +651,7 @@ def get_doc(call_id: str):
 def get_audio(call_id: str, clear: bool = False):
     meta = _meta_or_404(call_id)
     d = store.call_dir(call_id)
+    clear = clear and not config.WEB_MODE  # no clear voice on the website
     path = d / "enhanced.m4a" if clear and store.exists(d / "enhanced.m4a") else d / (meta.get("play_file") or meta["audio_file"])
     return FileResponse(store.ensure_local(path))
 
