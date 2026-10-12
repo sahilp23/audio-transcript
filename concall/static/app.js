@@ -1131,10 +1131,11 @@ const Player = {
 
   setupAudio() {
     const a = this.audio;
-    const clear = !!this.user.clear && this.meta.enhanced === "ready";
+    const clear = !state.status?.web && !!this.user.clear && this.meta.enhanced === "ready";  // website: no clear voice
     const src = `/api/calls/${this.id}/audio${clear ? "?clear=1" : ""}`;
     $("#player").classList.remove("hidden");
     $("#pl-clear").classList.toggle("active", clear);
+    $("#pl-clear").classList.toggle("hidden", !!state.status?.web);
     this.syncPlayerTitle();
     this.renderTimeline();
     if (a.dataset.callId !== this.id) {
